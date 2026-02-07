@@ -32,13 +32,20 @@ These commands are returned by MCP tools (`check_status`, `post_status`) to guid
 
 ## 2. Tool Input/Output Schemas
 
+### Common Fields
+All requests MUST include:
+*   `repo_url`: "https://github.com/user/repo.git"
+*   `branch`: "main" (or current branch)
+
 ### `check_status`
 
 **Request:**
 ```json
 {
+  "repo_url": "https://github.com/dedalus/core.git",
+  "branch": "main",
   "symbols": ["auth.ts", "auth.ts::validateToken"],
-  "agent_head": "abc1234567890abcdef1234567890abcdef12" 
+  "agent_head": "abc1234..." 
 }
 ```
 
@@ -54,6 +61,10 @@ These commands are returned by MCP tools (`check_status`, `post_status`) to guid
       "timestamp": 1234567890
     }
   },
+  "warnings": [
+    "OFFLINE_MODE: Vercel is unreachable. Reading allowed, Writing disabled.",
+    "STALE_BRANCH: Your branch is behind origin/main."
+  ],
   "orchestration": {
     "type": "orchestration_command",
     "action": "PULL",
@@ -68,7 +79,9 @@ These commands are returned by MCP tools (`check_status`, `post_status`) to guid
 **Request:**
 ```json
 {
-  "symbols": ["auth.ts::validateToken", "auth.ts::login"], // Supports multi-locking
+  "repo_url": "https://github.com/dedalus/core.git",
+  "branch": "main",
+  "symbols": ["auth.ts::validateToken", "auth.ts::login"], 
   "status": "READING" | "WRITING" | "OPEN",
   "message": "Refactoring auth logic",
   "agent_head": "abc1234...",
@@ -80,7 +93,7 @@ These commands are returned by MCP tools (`check_status`, `post_status`) to guid
 ```json
 {
   "success": true,
-  "orphaned_dependencies": ["utils.ts"], // Info on what else might need locking
+  "orphaned_dependencies": ["utils.ts"], 
   "orchestration": {
     "type": "orchestration_command",
     "action": "PROCEED",
@@ -96,23 +109,12 @@ These commands are returned by MCP tools (`check_status`, `post_status`) to guid
 ### Lock Entry
 ```json
 {
+  "key": "repo_url:branch:symbol", // Composite Key
   "symbol": "string",
-  "user_id": "string", // GitHub Username
+  "user_id": "string", 
   "status": "READING" | "WRITING",
   "agent_head": "string",
   "timestamp": 1610000000,
-  "expiry": 1610000100 // timestamp + 100s
-}
-```
-
-### Activity Log
-```json
-{
-  "id": "uuid",
-  "user_id": "github_user_1",
-  "message": "Starting header component refactor",
-  "scope": ["src/components/Header.tsx"],
-  "intent": "WRITING",
-  "timestamp": 1610000000
+  "expiry": 1610000120 // timestamp + 120s (Passive Timeout)
 }
 ```

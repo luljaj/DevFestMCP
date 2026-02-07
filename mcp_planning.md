@@ -6,9 +6,10 @@
 
 **Key Constraints**:
 - **Statelessness**: The MCP server MUST NOT store any state in memory or on disk. All state (locks, activity log, repo head) resides in the Vercel backend.
-- **Authentication**: **GitHub Authentication**. Agents authenticate using GitHub tokens. The MCP server validates identity against GitHub/Vercel.
-- **Orchestration**: Returns strict **orchestration commands** (defined in `schema.md`) to guide agents (e.g., `git pull`, `wait`).
-- **Atomicity**: Vercel API handles atomic locking to prevent race conditions.
+- **Authentication**: **GitHub via Dedalus**. Agents pass their GitHub Token as an encrypted Dedalus credential. The MCP server decrypts it via `get_context()` and validates identity with GitHub.
+- **Orchestration**: Returns strict **orchestration commands** (defined in `schema.md`) to guide agents.
+- **Concurrency**: Locks are **advisory intent signals**. They prevent agents from *starting* work on the same file, but cannot physically block a git push if another user bypasses the system.
+- **Atomicity**: Vercel API handles atomic locking via transactions/scripts to prevent race conditions during lock acquisition.
 
 ---
 
@@ -18,14 +19,18 @@
 ```
 [ Agent Layer ]  (Cursor/VSCode)
       FIELD AGENTS
-      ↓  (MCP Tool Call + GitHub Token)
+      ↓  (MCP Tool Call + Encrypted GitHub Token)
+      ↓
+[ Dedalus Layer ] (Infrastructure)
+      AUTHENTICATION & ROUTING
+      ↓  (Decrypted Context)
       ↓
 [ MCP Server ]   (Python/FastAPI)
       COORDINATION LOGIC (Stateless)
       ↓  (GET/POST State via HTTPS)      ↑ (Orchestration Commands)
       ↓                                  |
 [ Vercel Layer ] (Next.js/KV/PG)
-      STATE & SIGNALING (Atomic Locks)
+      STATE & SIGNALING
       ↓  (Persist to DB)
       ↓  (Broadcast via WebSocket)
 [ Broadcast ]    (WebSocket)
@@ -33,31 +38,36 @@
 [ Clients ]      (Browser UI / Other Agents)
 ```
 
-### Critical Flow: Atomic Locking
+### Critical Flow: Atomic Locking & Race Conditions
 1.  **Agent -> MCP**: `post_status(symbols=[...], status="WRITING")`
 2.  **MCP -> Vercel**: `POST /api/lock` (Atomic Transaction)
-    *   Vercel checks if ANY symbol is already locked by another user.
+    *   Vercel checks if ANY symbol is locked by another user *on this branch*.
     *   If locked: Returns 409 Conflict.
     *   If free: Sets locks and returns 200 OK.
-3.  **Vercel -> MCP**: Response.
-4.  **MCP -> Agent**:
-    *   If 409: Returns `ORCHESTRATION_COMMAND: WAIT` or `STOP`.
-    *   If 200: Returns `ORCHESTRATION_COMMAND: PROCEED`.
+3.  **Real-World Git Consistency**:
+    *   The lock guarantees **User A** intends to write.
+    *   If **User B** pushes to the same file (bypassing MCP), User A's subsequent push will fail at the git layer (non-fast-forward).
+    *   MCP minimizes wasted effort but cannot strictly enforce git consistency without server-side hooks.
 
 ---
 
-## 3. Authentication (GitHub)
+## 3. Authentication (Dedalus + GitHub)
 
 **Mechanism**:
-- **Client-Side**: Agents provide a GitHub Personal Access Token (PAT) or OAuth token in the request headers/context.
-- **Verification**: MCP server verifies the token with GitHub (or Vercel passes it through) to resolve the `user_id` (GitHub username).
-- **Identity**: All locks and activities are attributed to the GitHub username.
+- **Client-Side**: Agents configure their `.env` with a `GITHUB_TOKEN`.
+- **Dedalus Transport**: The agent wraps this token in a Dedalus `SecretValue` and passes it to the MCP server.
+- **MCP Server**:
+    1.  Calls `ctx = get_context()` (Dedalus SDK).
+    2.  Extracts the decrypted `GITHUB_TOKEN` from `ctx.request_context.credentials`.
+    3.  Validates the token against GitHub API (e.g., `GET /user`) to resolve the **GitHub Username**.
+- **Identity**: All locks and activities are attributed to this verified GitHub Username.
 
 **Implementation Note**:
 ```python
 ctx = get_context()
-# Header: Authorization: Bearer <github_token>
-user = verify_github_token(ctx.request_headers["Authorization"])
+token = ctx.request_context.credentials.get("GITHUB_TOKEN")
+user_profile = verify_github_token(token) # logic in utils
+user_id = user_profile.login
 ```
 
 ---
@@ -69,18 +79,19 @@ Refer to `schema.md` for exact JSON schemas.
 ### Tool 1: `check_status`
 **Entry Point**: Agents **MUST** call this first.
 
-*   **Input**: `symbols` (List), `agent_head` (String).
+*   **Input**: `symbols` (List), `agent_head` (String), `repo_url`, `branch`.
 *   **Logic**:
     1.  Query Vercel for `repo_head` and `locks`.
-    2.  **Offline Mode**: If Vercel is unreachable (500/Timeout), return status `OFFLINE`. Allow `READING` but warn "Do not push".
+    2.  **Offline Mode**: If Vercel is unreachable (500/Timeout), return status `OFFLINE`.
+        *   **Warning**: "OFFLINE_MODE: Vercel is unreachable. Reading allowed (risky), Writing disabled."
+        *   **Orchestration**: `PROCEED` (with warning) for READ, `STOP` for WRITE.
     3.  **Staleness**: If `agent_head != repo_head`, return `ORCHESTRATION_COMMAND: PULL`.
 *   **Output**: Schema defined in `schema.md`.
 
 ### Tool 2: `post_status`
 **Purpose**: Claim/Release locks. Supports **Multi-Symbol Locking** (Atomic).
 
-*   **Input**: `symbols` (List), `status` ("READING"|"WRITING"|"OPEN"), `agent_head`, `new_repo_head`.
-*   **Recursive Locking**: Agents can include dependencies in the `symbols` list to lock a "parent and its dependencies".
+*   **Input**: `symbols` (List), `status`, `agent_head`, `branch`, `repo_url`.
 *   **Logic**:
     1.  **Validation**: Enforce `agent_head == repo_head` for WRITING.
     2.  **Atomic Call**: Send list of symbols to Vercel `/api/lock`.
@@ -93,11 +104,15 @@ Refer to `schema.md` for exact JSON schemas.
 **Purpose**: Team updates (Slack-style).
 *   **Input**: `message`, `scope`, `intent`.
 
-### Tool 4: `heartbeat`
-**Purpose**: Refresh lock expiry.
-**Timeout**: **100 seconds**.
-*   **Failure Mode**: If heartbeat fails (404 Lock Lost / 500 Vercel Down), return `ORCHESTRATION_COMMAND: STOP`.
-    *   Agent **MUST** stop writing and warn the user immediately.
+### Tool 4: `post_activity`
+**Purpose**: Team updates (Slack-style).
+*   **Input**: `message`, `scope`, `intent`.
+
+### Passive Timeout (No Heartbeat)
+**Timeout**: **120 seconds** (2 minutes).
+*   **Mechanism**: There is no active heartbeat.
+*   **Expiration**: If a lock's timestamp is older than 120 seconds, it is automatically considered **FREE**.
+*   **Agent Responsibility**: Agents must complete their work chunks within 2 minutes or re-issue a `post_status` to extend the lock. This keeps the system snappy and prevents zombie locks from crashed agents.
 
 ---
 

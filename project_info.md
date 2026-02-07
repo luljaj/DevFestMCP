@@ -127,17 +127,17 @@
 │              COORDINATION LOGIC LAYER (MCP Server - STATELESS)             │
 │                                                                             │
 │  ┌───────────────────────────────────────────────────────────────────────┐ │
-│  │                    🔐 Authentication Pipeline (GitHub)                 │ │
+│  │             🔐 Authentication Pipeline (Dedalus + GitHub)             │ │
 │  │                                                                       │ │
 │  │  Every MCP Tool Call Flow:                                           │ │
 │  │                                                                       │ │
 │  │  1. Tool invoked by agent                                            │ │
 │  │      ↓                                                                │ │
-│  │  2. Agent sends GitHub PAT/OAuth Token in headers                     │ │
+│  │  2. Agent passes GitHub Token as Dedalus Credential ("GITHUB_TOKEN") │ │
 │  │      ↓                                                                │ │
-│  │  3. MCP Server validates token with GitHub/Vercel                     │ │
+│  │  3. MCP: get_context() → Decrypts Token                              │ │
 │  │      ↓                                                                │ │
-│  │  4. Resolve User Identity (GitHub Username: "octocat")                │ │
+│  │  4. MCP verifies token with GitHub API → Resolves Username            │ │
 │  │      ↓                                                                │ │
 │  │  5. Tool executes with authenticated user context                    │ │
 │  │                                                                       │ │
@@ -154,15 +154,19 @@
 │  │  async def check_status(                                             │ │
 │  │      request: CheckStatusRequest                                     │ │
 │  │  ) -> CheckStatusResponse:                                           │ │
-│  │      user = authenticate_github(request)    ← GitHub Identity        │ │
+│  │      ctx = get_context()                                             │ │
+│  │      token = ctx.request_context.credentials["GITHUB_TOKEN"]         │ │
+│  │      user = verify_github_token(token)                               │ │
 │  │                                                                       │ │
 │  │      # Forward to webapp API (Atomic Check)                          │ │
 │  │      response = await http_post(                                     │ │
 │  │          f"{WEBAPP_URL}/api/state",                                  │ │
 │  │          json={                                                      │ │
-│  │              "user_id": user.username,                               │ │
+│  │              "user_id": user.login,                                  │ │
 │  │              "symbols": request.symbols,                             │ │
-│  │              "agent_head": request.agent_head                        │ │
+│  │              "agent_head": request.agent_head,                       │ │
+│  │              "repo_url": request.repo_url,                           │ │
+│  │              "branch": request.branch                                │ │
 │  │          }                                                            │ │
 │  │      )                                                                │ │
 │  │                                                                       │ │
@@ -179,10 +183,7 @@
 │  │  │   → Status: "OPEN" | "READING" | "WRITING"                      ││ │
 │  │  │   → Webapp updates lock table + broadcasts via WebSocket        ││ │
 │  │  │                                                                  ││ │
-│  │  │ • heartbeat(symbols)                                            ││ │
-│  │  │   → POST /api/heartbeat                                         ││ │
-│  │  │   → Webapp updates last_heartbeat timestamps                    ││ │
-│  │  │                                                                  ││ │
+
 │  │  │ • post_activity(message, scope, intent)                         ││ │
 │  │  │   → POST /api/post_activity                                     ││ │
 │  │  │   → Webapp adds to activity_feed + broadcasts                   ││ │
@@ -364,8 +365,8 @@
 │  │                                                                       │ │
 │  │  cleanup_stale_locks():                                              │ │
 │  │  ├─ Runs every 10 seconds (Vercel cron or background job)            │ │
-│  │  ├─ Checks last_heartbeat for each lock in lock_table                │ │
-│  │  ├─ If > 60 seconds since heartbeat → Expire lock                    │ │
+│  │  ├─ Checks timestamp for each lock in lock_table                     │ │
+│  │  ├─ If > 120 seconds old → Expire lock                               │ │
 │  │  ├─ Broadcast "lock_expired" event via WebSocket                     │ │
 │  │  ├─ Log to status_log                                                │ │
 │  │  └─ Update lock_table (set to OPEN)                                  │ │
@@ -507,12 +508,12 @@ PHASE 1: Client-Side Setup (Luka's Machine)
 │                                      │
 │ .env file on disk:                   │
 │ ┌──────────────────────────────────┐ │
-│ │ COORD_API_KEY=coord_sk_luka_abc12│ │
+│ │ GITHUB_TOKEN=ghp_luka_abc123...    │ │
 │ │ DEDALUS_API_KEY=dls_xxx...       │ │
 │ └──────────────────────────────────┘ │
 │                                      │
 │ Python reads:                        │
-│ api_key = os.getenv("COORD_API_KEY") │
+│ api_key = os.getenv("GITHUB_TOKEN")  │
 │ # api_key = "coord_sk_luka_abc123"  │
 └──────────────────┬───────────────────┘
                    │
@@ -523,7 +524,7 @@ PHASE 1: Client-Side Setup (Luka's Machine)
 │ coord_connection = Connection(       │
 │     name="coordination-server",     │
 │     secrets=SecretKeys(             │
-│         key="COORD_API_KEY"         │
+│         key="GITHUB_TOKEN"          │
 │     )                               │
 │ )                                    │
 │                                      │
@@ -580,7 +581,7 @@ PHASE 2: Network Transit
 │     "symbols": ["auth.ts::login"]   │
 │   },                                │
 │   "credentials": {                  │
-│     "COORD_API_KEY":                │
+│     "GITHUB_TOKEN":                 │
 │       "aG4kL9mPxY2zQ8vT3nM1kL=="    │
 │   }                    ↑             │
 │ }                      │             │
@@ -661,11 +662,11 @@ PHASE 4: MCP Server Execution
 │     ctx = get_context()              │
 │                                      │
 │     # Extract plaintext credential   │
-│     api_key = ctx.request_context    │
-│         .credentials["COORD_API_KEY"]│
+│     token = ctx.request_context      │
+│         .credentials["GITHUB_TOKEN"] │
 │                                      │
-│     # api_key is now:                │
-│     # "coord_sk_luka_abc123"         │
+│     # token is now:                  │
+│     # "ghp_luka_abc123..."           │
 │     #         ↑                      │
 │     #    Plaintext!                  │
 └──────────────────┬───────────────────┘
@@ -674,19 +675,17 @@ PHASE 4: MCP Server Execution
 ┌──────────────────────────────────────┐
 │ Step 8: Authenticate User            │
 │                                      │
-│ def authenticate(api_key: str):      │
-│     # Hash the API key               │
-│     key_hash = sha256(api_key)       │
-│     # key_hash = "7a3f2b..."         │
-│                                      │
-│     # Lookup in user database        │
-│     user = USERS[key_hash]           │
+│ def authenticate(token: str):        │
+│     # Call GitHub API                │
+│     user_profile = github.get_user(  │
+│         token=token                  │
+│     )                                │
 │                                      │
 │     # Returns:                       │
 │     # {                              │
-│     #   user_id: "luka",             │
-│     #   email: "luka@example.com",   │
-│     #   name: "Luka"                 │
+│     #   user_id: user_profile.login, │
+│     #   email: user_profile.email,   │
+│     #   name: user_profile.name      │
 │     # }                              │
 │                                      │
 │ ✓ Now we know WHO made this request │
@@ -745,7 +744,7 @@ PHASE 5: Cleanup
 SECURITY PROPERTIES SUMMARY:
 
 ✅ Client-Side Encryption
-   → API key encrypted before leaving user's machine
+   → GitHub Token encrypted before leaving user's machine
    
 ✅ Zero-Knowledge Architecture
    → Dedalus never sees plaintext during storage/transit
