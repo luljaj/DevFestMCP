@@ -6,8 +6,9 @@
 
 **Key Constraints**:
 - **Statelessness**: The MCP server MUST NOT store any state in memory or on disk. All state (locks, activity log, repo head) resides in the Vercel backend.
-- **Authentication**: Uses Dedalus infrastructure. Credentials (`COORD_API_KEY`) are encrypted client-side, decrypted just-in-time by Dedalus, and used to authenticate the user for every request.
-- **Orchestration**: The MCP server receives requests from agents, queries Vercel for state, applies logic (e.g., conflict detection), and returns **orchestration commands** (e.g., "git pull required") to the agent.
+- **Authentication**: **GitHub Authentication**. Agents authenticate using GitHub tokens. The MCP server validates identity against GitHub/Vercel.
+- **Orchestration**: Returns strict **orchestration commands** (defined in `schema.md`) to guide agents (e.g., `git pull`, `wait`).
+- **Atomicity**: Vercel API handles atomic locking to prevent race conditions.
 
 ---
 
@@ -17,18 +18,14 @@
 ```
 [ Agent Layer ]  (Cursor/VSCode)
       FIELD AGENTS
-      ↓  (MCP Tool Call + Encrypted Creds)
-      ↓
-[ Dedalus Layer ] (Infrastructure)
-      AUTHENTICATION & ROUTING
-      ↓  (Decrypted Context)
+      ↓  (MCP Tool Call + GitHub Token)
       ↓
 [ MCP Server ]   (Python/FastAPI)
       COORDINATION LOGIC (Stateless)
-      ↓  (GET/POST State)      ↑ (Orchestration Commands)
-      ↓                        |
+      ↓  (GET/POST State via HTTPS)      ↑ (Orchestration Commands)
+      ↓                                  |
 [ Vercel Layer ] (Next.js/KV/PG)
-      STATE & SIGNALING
+      STATE & SIGNALING (Atomic Locks)
       ↓  (Persist to DB)
       ↓  (Broadcast via WebSocket)
 [ Broadcast ]    (WebSocket)
@@ -36,137 +33,99 @@
 [ Clients ]      (Browser UI / Other Agents)
 ```
 
-### Critical Flows
-1.  **Agent -> MCP**: Agent calls `check_status` or `post_status`.
-2.  **MCP -> Vercel**: MCP authenticates user, then queries Vercel API for current `lock_table` and `repo_head`.
-3.  **Vercel -> MCP**: Vercel returns state.
-4.  **MCP -> Agent**: MCP analyzes state and returns:
-    *   **Status**: OK / REJECTED
-    *   **Data**: Locks, Activity
-    *   **Orchestration Commands**: `git pull --rebase`, `wait`, `resolve_conflict`
+### Critical Flow: Atomic Locking
+1.  **Agent -> MCP**: `post_status(symbols=[...], status="WRITING")`
+2.  **MCP -> Vercel**: `POST /api/lock` (Atomic Transaction)
+    *   Vercel checks if ANY symbol is already locked by another user.
+    *   If locked: Returns 409 Conflict.
+    *   If free: Sets locks and returns 200 OK.
+3.  **Vercel -> MCP**: Response.
+4.  **MCP -> Agent**:
+    *   If 409: Returns `ORCHESTRATION_COMMAND: WAIT` or `STOP`.
+    *   If 200: Returns `ORCHESTRATION_COMMAND: PROCEED`.
 
 ---
 
-## 3. Authentication & Security (Dedalus Protocol)
+## 3. Authentication (GitHub)
 
 **Mechanism**:
-- **Client-Side**: `COORD_API_KEY` is loaded from `.env` and encrypted locally specifically for the Coordination Server.
-- **In-Transit**: Encrypted blob sent to Dedalus.
-- **Just-In-Time Decryption**: Dedalus decrypts the key in a secure enclave immediately before invoking the MCP tool.
-- **Context Injection**: The plaintext key is injected into the tool's execution context: `ctx.request_context.credentials["COORD_API_KEY"]`.
-- **User Resolution**: The MCP server hashes this key to look up the user identity (User ID, Email, Name) via the Vercel backend's user directory.
+- **Client-Side**: Agents provide a GitHub Personal Access Token (PAT) or OAuth token in the request headers/context.
+- **Verification**: MCP server verifies the token with GitHub (or Vercel passes it through) to resolve the `user_id` (GitHub username).
+- **Identity**: All locks and activities are attributed to the GitHub username.
 
 **Implementation Note**:
-Every tool implementation must start with:
 ```python
 ctx = get_context()
-api_key = ctx.request_context.credentials.get("COORD_API_KEY")
-user = authenticate_user(api_key) # Hashes key, queries Vercel/Cache
+# Header: Authorization: Bearer <github_token>
+user = verify_github_token(ctx.request_headers["Authorization"])
 ```
 
 ---
 
-## 4. MCP Tool Definitions (API Protocol)
+## 4. MCP Tool Definitions
 
-The MCP server exposes the following tools to agents. These are the **only** entry points.
+Refer to `schema.md` for exact JSON schemas.
 
 ### Tool 1: `check_status`
-**Purpose**: The "Look Before You Leap" primitive. Agents MUST call this before starting work.
-**Orchestration Role**: Delivers "pull required" commands if the agent is stale.
+**Entry Point**: Agents **MUST** call this first.
 
-*   **Input**:
-    *   `symbols` (List[str]): The files/symbols the agent intends to work on.
-    *   `agent_head` (str): The current git HEAD SHA of the agent's local repo.
-
+*   **Input**: `symbols` (List), `agent_head` (String).
 *   **Logic**:
-    1.  Fetch `repo_head` (latest known shared state) from Vercel.
-    2.  Fetch `lock_table` from Vercel.
-    3.  Compare `agent_head` vs `repo_head`.
-    4.  Check if `symbols` are locked by others.
-
-*   **Output (Response)**:
-    *   `status`: "OK" | "STALE" | "CONFLICT"
-    *   `repo_head`: "abc1234..."
-    *   `locks`: Dict of existing locks on requested symbols.
-    *   **Orchestration Command**:
-        *   If `agent_head != repo_head`: `{"action": "pull", "command": "git pull --rebase"}`
-        *   If `locks` exist: `{"action": "wait", "reason": "Symbol locked by <user>"}`
-        *   Otherwise: `null` (Proceed)
+    1.  Query Vercel for `repo_head` and `locks`.
+    2.  **Offline Mode**: If Vercel is unreachable (500/Timeout), return status `OFFLINE`. Allow `READING` but warn "Do not push".
+    3.  **Staleness**: If `agent_head != repo_head`, return `ORCHESTRATION_COMMAND: PULL`.
+*   **Output**: Schema defined in `schema.md`.
 
 ### Tool 2: `post_status`
-**Purpose**: Claim or Release a lock.
-**Orchestration Role**: Enforces freshness. Rejects claims if agent is stale.
+**Purpose**: Claim/Release locks. Supports **Multi-Symbol Locking** (Atomic).
 
-*   **Input**:
-    *   `symbol` (str): The symbol to lock/unlock.
-    *   `status` (str): "READING" | "WRITING" | "OPEN"
-    *   `message` (str): Description of intent (e.g., "Refactoring auth").
-    *   `agent_head` (str): Required for WRITING. Current local HEAD.
-    *   `new_repo_head` (str): Required for OPEN (if changed). New HEAD after push.
-
+*   **Input**: `symbols` (List), `status` ("READING"|"WRITING"|"OPEN"), `agent_head`, `new_repo_head`.
+*   **Recursive Locking**: Agents can include dependencies in the `symbols` list to lock a "parent and its dependencies".
 *   **Logic**:
-    1.  **Validation**:
-        *   If `status` == "WRITING": Enforce `agent_head == repo_head`. If not, REJECT with "pull required".
-        *   If `status` == "OPEN": If `new_repo_head` provided, update `repo_head` in Vercel.
-    2.  **Update**: Call Vercel API to update `lock_table`.
-    3.  **Broadcast**: Trigger Vercel to broadcast `status_update` via WebSocket.
-
-*   **Output (Response)**:
-    *   `success`: bool
-    *   **Orchestration Command**:
-        *   If Rejected (Stale): `{"action": "pull", "command": "git pull --rebase"}`
-        *   If Rejected (Head Not Advanced on Release): `{"action": "push", "command": "git push"}`
+    1.  **Validation**: Enforce `agent_head == repo_head` for WRITING.
+    2.  **Atomic Call**: Send list of symbols to Vercel `/api/lock`.
+    3.  **Orchestration**:
+        *   If Vercel returns 409 (Conflict): Return `WAIT` command.
+        *   If Vercel returns 200: Return `PROCEED`.
+        *   If Vercel down: Return `STOP` (Cannot safely write without locks).
 
 ### Tool 3: `post_activity`
-**Purpose**: High-level "Slack-style" updates for the team.
-**Use Case**: "Starting major refactor of Auth", "Fixing bug #123".
-
-*   **Input**:
-    *   `message` (str): The update text.
-    *   `scope` (List[str]): Related files/symbols.
-    *   `intent` (str): "READING" | "WRITING" | "DEBUGGING"
-
-*   **Logic**:
-    1.  Call Vercel API to append to `activity_feed`.
-    2.  Trigger Vercel to broadcast `activity_posted` via WebSocket.
+**Purpose**: Team updates (Slack-style).
+*   **Input**: `message`, `scope`, `intent`.
 
 ### Tool 4: `heartbeat`
-**Purpose**: Keep locks alive.
-**Constraint**: Locks expire after 60s without a heartbeat.
-
-*   **Input**:
-    *   `symbols` (List[str]): List of active locks to refresh.
-
-*   **Logic**:
-    1.  Call Vercel API to update `last_heartbeat` for these locks.
+**Purpose**: Refresh lock expiry.
+**Timeout**: **100 seconds**.
+*   **Failure Mode**: If heartbeat fails (404 Lock Lost / 500 Vercel Down), return `ORCHESTRATION_COMMAND: STOP`.
+    *   Agent **MUST** stop writing and warn the user immediately.
 
 ---
 
 ## 5. Vercel Integration (Backend API)
 
-The MCP server interacts with the Vercel backend via these REST endpoints:
+The MCP server interacts with Vercel via **HTTPS Requests**.
 
-*   **`GET /api/state`**: Returns `{ lock_table, repo_head, activity_feed }`.
-*   **`POST /api/lock`**: Updates a lock. Body: `{ symbol, user, status, message }`.
-    *   Side Effect: Broadcasts `status_update`.
-*   **`POST /api/repo_head`**: Updates the shared repo HEAD. Body: `{ sha }`.
-*   **`POST /api/activity`**: Adds an activity log.
-*   **`POST /api/heartbeat`**: Updates timestamps for locks.
+*   **`POST /api/lock`**:
+    *   Body: `{ symbols: ["A", "B"], user: "gh_user", status: "WRITING" }`
+    *   **Behavior**: Atomic check-and-set. All or nothing.
+*   **`GET /api/state`**: Returns global state.
+*   **`POST /api/heartbeat`**: Refreshes expiry (set to Now + 100s).
 
 ---
 
-## 6. Implementation Plan Checkpoints
+## 6. Implementation Checklist
 
-1.  **Skeleton**: basic FastAPI/MCP setup with `check_status` and `post_status` stubs.
-2.  **Auth Integration**: Implement `get_context()` decryption and mock user lookup.
-3.  **Vercel Client**: Implement the HTTP client to talk to the Vercel API (mocked initially if Vercel not ready).
-4.  **Orchestration Logic**: Implement the "Stale Repo" detection and command generation.
-5.  **Refinement**: Add `heartbeat` and `post_activity`.
+1.  **Schema Enforcement**: Use Pydantic models matching `schema.md`.
+2.  **GitHub Auth**: Middleware to validate tokens.
+3.  **Atomic Vercel Client**: Ensure `post_status` allows sending multiple symbols in one request.
+4.  **Error Handling**:
+    *   Vercel Down -> `check_status` = WARN (Offline).
+    *   Vercel Down -> `post_status(WRITING)` = STOP (Unsafe).
+5.  **Heartbeat Loop**: Ensure agents call every ~30-50s (well within 100s limit).
 
 ## 7. Prompts for AI Generation
 
-When generating the actual server code, emphasize:
-*   "You are building a **stateless** MCP server."
-*   "Use the `dedalus_mcp_utils` library for `get_context` (mock if needed)."
-*   "Strictly enforce the `agent_head == repo_head` check for WRITING locks."
-*   "Return distinct `orchestration_command` objects in responses to guide the agent."
+*   "Generate Pydantic models based on `schema.md`."
+*   "Implement `post_status` to hit Vercel's atomic `/api/lock` endpoint."
+*   "Use GitHub token validation for `get_user()`."
+*   "Implement the `OFFLINE` fallback in `check_status`."

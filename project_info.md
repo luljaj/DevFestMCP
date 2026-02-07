@@ -127,49 +127,46 @@
 │              COORDINATION LOGIC LAYER (MCP Server - STATELESS)             │
 │                                                                             │
 │  ┌───────────────────────────────────────────────────────────────────────┐ │
-│  │                    🔐 Authentication Pipeline                         │ │
+│  │                    🔐 Authentication Pipeline (GitHub)                 │ │
 │  │                                                                       │ │
 │  │  Every MCP Tool Call Flow:                                           │ │
 │  │                                                                       │ │
 │  │  1. Tool invoked by agent                                            │ │
 │  │      ↓                                                                │ │
-│  │  2. get_context() extracts decrypted credentials                     │ │
+│  │  2. Agent sends GitHub PAT/OAuth Token in headers                     │ │
 │  │      ↓                                                                │ │
-│  │  3. context.request_context.credentials["COORD_API_KEY"]             │ │
+│  │  3. MCP Server validates token with GitHub/Vercel                     │ │
 │  │      ↓                                                                │ │
-│  │  4. Hash API key → Lookup in user database                           │ │
+│  │  4. Resolve User Identity (GitHub Username: "octocat")                │ │
 │  │      ↓                                                                │ │
-│  │  5. Return UserInfo { user_id, email, name }                         │ │
-│  │      ↓                                                                │ │
-│  │  6. Tool executes with authenticated user context                    │ │
+│  │  5. Tool executes with authenticated user context                    │ │
 │  │                                                                       │ │
 │  └───────────────────────────────────────────────────────────────────────┘ │
 │                                                                             │
 │  ┌───────────────────────────────────────────────────────────────────────┐ │
 │  │                   MCP Tools (STATELESS - Forward to Webapp)           │ │
 │  │                                                                       │ │
-│  │  CRITICAL: MCP server is STATELESS (Dedalus requirement)             │ │
-│  │  All state lives in the Vercel webapp.                               │ │
+│  │  CRITICAL: MCP server is STATELESS.                                   │ │
+│  │  All state lives in the Vercel webapp.                                │ │
 │  │  MCP tools authenticate user, then forward to webapp API.            │ │
 │  │                                                                       │ │
 │  │  @tool(description="...")                                            │ │
-│  │  async def check_interference(                                       │ │
-│  │      request: CheckInterferenceRequest                               │ │
-│  │  ) -> CheckInterferenceResponse:                                     │ │
-│  │      ctx = get_context()                    ← Dedalus provides this │ │
-│  │      user = authenticate_from_context(ctx)  ← Extract who called    │ │
+│  │  async def check_status(                                             │ │
+│  │      request: CheckStatusRequest                                     │ │
+│  │  ) -> CheckStatusResponse:                                           │ │
+│  │      user = authenticate_github(request)    ← GitHub Identity        │ │
 │  │                                                                       │ │
-│  │      # Forward to webapp API                                         │ │
+│  │      # Forward to webapp API (Atomic Check)                          │ │
 │  │      response = await http_post(                                     │ │
-│  │          f"{WEBAPP_URL}/api/check_status",                           │ │
+│  │          f"{WEBAPP_URL}/api/state",                                  │ │
 │  │          json={                                                      │ │
-│  │              "user_id": user.user_id,                                │ │
+│  │              "user_id": user.username,                               │ │
 │  │              "symbols": request.symbols,                             │ │
 │  │              "agent_head": request.agent_head                        │ │
 │  │          }                                                            │ │
 │  │      )                                                                │ │
 │  │                                                                       │ │
-│  │      return CheckInterferenceResponse(**response.json())             │ │
+│  │      return CheckStatusResponse(**response.json())                   │ │
 │  │                                                                       │ │
 │  │  Available Tools (all forward to Vercel webapp):                    │ │
 │  │  ┌─────────────────────────────────────────────────────────────────┐│ │
