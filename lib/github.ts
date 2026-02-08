@@ -1,9 +1,15 @@
 import { Octokit } from 'octokit';
 import { kv } from './kv';
 
-export const octokit = new Octokit({
-  auth: process.env.GITHUB_TOKEN,
-});
+export function createOctokitClient(authToken?: string): Octokit {
+  const token = authToken?.trim() || process.env.GITHUB_TOKEN;
+  if (token) {
+    return new Octokit({ auth: token });
+  }
+  return new Octokit();
+}
+
+export const octokit = createOctokitClient();
 
 export function parseRepoUrl(repoUrl: string): { owner: string; repo: string } {
   const httpsMatch = repoUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?\/?$/i);
@@ -14,8 +20,13 @@ export function parseRepoUrl(repoUrl: string): { owner: string; repo: string } {
   throw new Error('Invalid GitHub URL');
 }
 
-export async function getRepoHead(owner: string, repo: string, branch: string): Promise<string> {
-  const { data } = await octokit.rest.git.getRef({
+export async function getRepoHead(
+  owner: string,
+  repo: string,
+  branch: string,
+  client: Octokit = octokit,
+): Promise<string> {
+  const { data } = await client.rest.git.getRef({
     owner,
     repo,
     ref: `heads/${branch}`,
@@ -64,6 +75,7 @@ export async function getRepoHeadCached(
   repo: string,
   branch: string,
   maxAgeMs = DEFAULT_REPO_HEAD_CACHE_MS,
+  client: Octokit = octokit,
 ): Promise<string> {
   if (maxAgeMs > 0) {
     const cachedRaw = await kv.get(getRepoHeadCacheKey(owner, repo, branch));
@@ -73,7 +85,7 @@ export async function getRepoHeadCached(
     }
   }
 
-  const head = await getRepoHead(owner, repo, branch);
+  const head = await getRepoHead(owner, repo, branch, client);
   const payload: RepoHeadCacheValue = { sha: head, fetched_at: Date.now() };
   await kv.set(getRepoHeadCacheKey(owner, repo, branch), JSON.stringify(payload));
   return head;

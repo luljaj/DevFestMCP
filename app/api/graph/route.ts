@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
 import { GraphService } from '@/lib/graph-service';
+import { authOptions } from '@/lib/auth';
 import {
   getGitHubQuotaErrorMessage,
   getGitHubQuotaResetMs,
@@ -10,6 +12,14 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
+    let accessToken: string | undefined;
+    try {
+      const session = await getServerSession(authOptions);
+      accessToken = session?.accessToken;
+    } catch {
+      accessToken = undefined;
+    }
+
     const { searchParams } = new URL(request.url);
     const repoUrl = searchParams.get('repo_url');
     const branch = searchParams.get('branch') || 'main';
@@ -19,7 +29,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'repo_url is required' }, { status: 400 });
     }
 
-    const service = new GraphService(repoUrl, branch);
+    const service = new GraphService(repoUrl, branch, accessToken);
     const graph = await service.get(regenerate);
 
     return NextResponse.json(graph, {

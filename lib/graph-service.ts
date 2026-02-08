@@ -1,10 +1,10 @@
 import { Buffer } from 'node:buffer';
 import {
+  createOctokitClient,
   getGitHubQuotaErrorMessage,
   getGitHubQuotaResetMs,
   getRepoHeadCached,
   isGitHubQuotaError,
-  octokit,
   parseRepoUrl,
 } from './github';
 import { kv } from './kv';
@@ -52,10 +52,12 @@ export class GraphService {
   private branch: string;
   private owner: string;
   private repo: string;
+  private octokitClient: ReturnType<typeof createOctokitClient>;
 
-  constructor(repoUrl: string, branch = 'main') {
+  constructor(repoUrl: string, branch = 'main', authToken?: string) {
     this.repoUrl = repoUrl;
     this.branch = branch;
+    this.octokitClient = createOctokitClient(authToken);
 
     const parsed = parseRepoUrl(repoUrl);
     this.owner = parsed.owner;
@@ -155,7 +157,13 @@ export class GraphService {
 
   async needsUpdate(): Promise<{ needsUpdate: boolean; currentHead: string }> {
     const keys = this.getKeys();
-    const currentHead = await getRepoHeadCached(this.owner, this.repo, this.branch);
+    const currentHead = await getRepoHeadCached(
+      this.owner,
+      this.repo,
+      this.branch,
+      undefined,
+      this.octokitClient,
+    );
     const storedHead = (await kv.get(keys.meta)) as string | null;
 
     return {
@@ -173,6 +181,7 @@ export class GraphService {
       this.repo,
       this.branch,
       force ? 0 : HEAD_CHECK_MIN_INTERVAL_MS,
+      this.octokitClient,
     );
 
     if (!force) {
@@ -185,7 +194,7 @@ export class GraphService {
       }
     }
 
-    const { data: treeData } = await octokit.rest.git.getTree({
+    const { data: treeData } = await this.octokitClient.rest.git.getTree({
       owner: this.owner,
       repo: this.repo,
       tree_sha: currentHead,
@@ -267,7 +276,7 @@ export class GraphService {
       }
 
       try {
-        const { data: contentData } = await octokit.rest.repos.getContent({
+        const { data: contentData } = await this.octokitClient.rest.repos.getContent({
           owner: this.owner,
           repo: this.repo,
           path: filePath,

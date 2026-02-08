@@ -7,7 +7,9 @@ Guide-first implementation of the coordination backend from `IMPLEMENTATION_GUID
 - Node.js 18+ (20 recommended)
 - npm
 - Vercel KV credentials
-- GitHub token with `repo` or `public_repo` scope
+- GitHub OAuth app credentials (`GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`)
+- `NEXTAUTH_SECRET`
+- Optional fallback `GITHUB_TOKEN` (server-wide token for unauthenticated requests)
 
 ## Setup
 
@@ -21,6 +23,20 @@ npm install
 
 ```bash
 cp .env.example .env.local
+```
+
+Required env vars:
+
+```bash
+KV_REST_API_URL=...
+KV_REST_API_TOKEN=...
+CRON_SECRET=...
+GITHUB_CLIENT_ID=...
+GITHUB_CLIENT_SECRET=...
+NEXTAUTH_SECRET=...
+
+# Optional fallback for non-authenticated GitHub API requests
+GITHUB_TOKEN=...
 ```
 
 3. Run locally:
@@ -76,6 +92,7 @@ vercel
 ```
 
 2. In Vercel dashboard, add KV storage (injects `KV_*` vars).
-3. Add `GITHUB_TOKEN` and `CRON_SECRET` environment variables.
-4. Confirm `vercel.json` cron is active for `/api/cleanup_stale_locks`.
+3. Add `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `NEXTAUTH_SECRET`, and `CRON_SECRET`.
+4. (Optional) Add `GITHUB_TOKEN` fallback for non-authenticated GitHub API access.
+5. Confirm `vercel.json` cron is active for `/api/cleanup_stale_locks`.
    - Hobby plan note: Cron runs are limited to daily schedules, so this project uses a once-per-day cleanup job.
