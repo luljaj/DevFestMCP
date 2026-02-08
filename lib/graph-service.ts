@@ -70,6 +70,7 @@ export class GraphService {
       graph: `graph:${this.repoUrl}:${this.branch}`,
       meta: `graph:meta:${this.repoUrl}:${this.branch}`,
       fileShas: `graph:file_shas:${this.repoUrl}:${this.branch}`,
+      fileContents: `graph:file_contents:${this.repoUrl}:${this.branch}`,
       headCheckedAt: `graph:head_checked_at:${this.repoUrl}:${this.branch}`,
       rateLimitedUntil: `graph:rate_limited_until:${this.repoUrl}:${this.branch}`,
     };
@@ -99,6 +100,26 @@ export class GraphService {
   private async setRateLimitedUntil(untilMs: number): Promise<void> {
     const keys = this.getKeys();
     await kv.set(keys.rateLimitedUntil, untilMs);
+  }
+
+  private async getCachedFileContent(sha: string): Promise<string | null> {
+    const keys = this.getKeys();
+    try {
+      const cached = await kv.hget(keys.fileContents, sha);
+      return typeof cached === 'string' ? cached : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async setCachedFileContent(sha: string, content: string): Promise<void> {
+    const keys = this.getKeys();
+    try {
+      await kv.hset(keys.fileContents, { [sha]: content });
+    } catch (error) {
+      // Log but don't fail if cache write fails
+      console.warn(`[Graph] Failed to cache content for SHA ${sha}:`, error);
+    }
   }
 
   private async setHeadCheckedAt(timestamp: number): Promise<void> {
@@ -238,6 +259,16 @@ export class GraphService {
       if (deletedFiles.length > 0) {
         nodes = nodes.filter((node) => !deletedFiles.includes(node.id));
         edges = edges.filter((edge) => !deletedFiles.includes(edge.source) && !deletedFiles.includes(edge.target));
+
+        // Clean up cached content for deleted files
+        const deletedShas = deletedFiles.map(filePath => storedShas[filePath]).filter(Boolean);
+        if (deletedShas.length > 0) {
+          try {
+            await kv.hdel(keys.fileContents, ...deletedShas);
+          } catch (error) {
+            console.warn('[Graph] Failed to clean up cached content for deleted files:', error);
+          }
+        }
       }
 
       if (changedFiles.length > 0) {
@@ -262,6 +293,8 @@ export class GraphService {
     const resolver = new ImportResolver(allFilePaths);
     const filesToProcess = needsFullRebuild ? files : incrementalFiles;
     let processedCount = 0;
+    let cacheHits = 0;
+    let cacheMisses = 0;
     const edgeSet = new Set(edges.map((edge) => `${edge.source}=>${edge.target}`));
 
     for (const file of filesToProcess) {
@@ -277,18 +310,33 @@ export class GraphService {
       }
 
       try {
-        const { data: contentData } = await this.octokitClient.rest.repos.getContent({
-          owner: this.owner,
-          repo: this.repo,
-          path: filePath,
-          ref: currentHead,
-        });
+        let content: string | null = null;
 
-        if (!('content' in contentData) || typeof contentData.content !== 'string') {
-          continue;
+        // Try to get content from cache first (by SHA)
+        const cachedContent = await this.getCachedFileContent(file.sha);
+        if (cachedContent) {
+          content = cachedContent;
+          cacheHits += 1;
+        } else {
+          // Cache miss - fetch from GitHub
+          const { data: contentData } = await this.octokitClient.rest.repos.getContent({
+            owner: this.owner,
+            repo: this.repo,
+            path: filePath,
+            ref: currentHead,
+          });
+
+          if (!('content' in contentData) || typeof contentData.content !== 'string') {
+            continue;
+          }
+
+          content = Buffer.from(contentData.content, 'base64').toString('utf-8');
+
+          // Cache the content for future use
+          await this.setCachedFileContent(file.sha, content);
+          cacheMisses += 1;
         }
 
-        const content = Buffer.from(contentData.content, 'base64').toString('utf-8');
         const language = getFileLanguage(filePath);
         if (!language) {
           continue;
@@ -359,7 +407,12 @@ export class GraphService {
     await pipeline.exec();
 
     const elapsed = Date.now() - startTime;
-    console.log(`[Graph] Complete in ${elapsed}ms: ${nodes.length} nodes, ${edges.length} edges`);
+    const cacheEfficiency = processedCount > 0 ? Math.round((cacheHits / processedCount) * 100) : 0;
+    console.log(
+      `[Graph] Complete in ${elapsed}ms: ${nodes.length} nodes, ${edges.length} edges | ` +
+      `Cache: ${cacheHits} hits, ${cacheMisses} misses (${cacheEfficiency}% hit rate) | ` +
+      `GitHub API calls saved: ${cacheHits}`
+    );
 
     graph.locks = await getLocks(this.repoUrl, this.branch);
     return graph;
