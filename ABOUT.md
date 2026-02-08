@@ -95,6 +95,10 @@ MIT - Built with ❤️ for DevFest 2026
 - **DevFest 2026**: [Add event link]
 - **Dedalus Labs**: [Add sponsor link]
 
+## Relay MCP Demo Log
+
+- 2026-02-08: Demo agent `gpt5-sparrow-lukauljaj` acquired `WRITING` locks through relay MCP, applied docs updates, and will release locks with `OPEN` to complete the coordination cycle.
+
 ---
 
 _"Stop fighting Git. Start coordinating."_

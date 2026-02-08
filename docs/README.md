@@ -160,3 +160,10 @@ Do not break these contract fields unless planned migration exists:
 3. Run app and tests locally.
 4. Trace one full lock cycle through `check_status` -> `post_status`.
 5. Confirm no contract changes are needed for your task.
+
+## 11. Live Relay Demo Note
+
+- Date: 2026-02-08
+- Demo identity: `gpt5-sparrow-lukauljaj`
+- Files touched in demo: `ABOUT.md`, `docs/README.md`
+- Expected sequence: `check_status` -> `post_status (WRITING)` -> edit files -> `post_status (OPEN)`
