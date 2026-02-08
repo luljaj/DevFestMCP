@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GraphService } from '@/lib/graph-service';
-import { getGitHubQuotaErrorMessage, isGitHubQuotaError } from '@/lib/github';
+import {
+  getGitHubQuotaErrorMessage,
+  getGitHubQuotaResetMs,
+  isGitHubQuotaError,
+} from '@/lib/github';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,15 +24,17 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(graph, {
       headers: {
-        'Cache-Control': 'public, max-age=5, s-maxage=5',
+        'Cache-Control': 'public, max-age=10, s-maxage=30, stale-while-revalidate=60',
       },
     });
   } catch (error) {
     if (isGitHubQuotaError(error)) {
+      const retryAtMs = getGitHubQuotaResetMs(error);
       return NextResponse.json(
         {
           error: 'GitHub API rate limit exceeded',
           details: getGitHubQuotaErrorMessage(error),
+          retry_after_ms: retryAtMs ?? undefined,
         },
         { status: 429 },
       );

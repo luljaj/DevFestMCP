@@ -3,15 +3,15 @@
 @tailwind utilities;
 
 :root {
-  --bg: #f4f7fb;
+  --bg: #f5f5f5;
   --surface: #ffffff;
-  --text: #0f172a;
-  --muted: #475569;
-  --accent: #0f766e;
+  --text: #18181b;
+  --muted: #52525b;
+  --accent: #27272a;
   --danger: #b91c1c;
-  --warning: #b45309;
-  --ok: #047857;
-  --border: #d6e1ee;
+  --warning: #52525b;
+  --ok: #3f3f46;
+  --border: #d4d4d8;
 }
 
 /* 
@@ -56,21 +56,18 @@ body {
         background: transparent;
     }
     .custom-scrollbar::-webkit-scrollbar-thumb {
-        background-color: #cbd5e1;
+        background-color: #d4d4d8;
         border-radius: 20px;
     }
     .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-        background-color: #94a3b8;
+        background-color: #a1a1aa;
     }
 }
 
 body {
   font-family: 'Space Grotesk', 'Avenir Next', 'Segoe UI', sans-serif;
   color: var(--text);
-  background:
-    radial-gradient(circle at top right, #d7f7ea 0%, transparent 45%),
-    radial-gradient(circle at bottom left, #dbeafe 0%, transparent 40%),
-    var(--bg);
+  background: var(--bg);
 }
 
 a {
@@ -139,7 +136,7 @@ a {
 }
 
 .action-button.secondary {
-  background: #0f172a;
+  background: #18181b;
 }
 
 .error-text {
@@ -208,7 +205,7 @@ a {
 .file-row {
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: #f8fafc;
+  background: #fafafa;
   text-align: left;
   padding: 0.45rem 0.55rem;
   display: grid;
@@ -217,8 +214,8 @@ a {
 }
 
 .file-row.selected {
-  border-color: #0f172a;
-  background: #e2e8f0;
+  border-color: #18181b;
+  background: #e4e4e7;
 }
 
 .file-path {
@@ -238,15 +235,15 @@ a {
 }
 
 .status-pill.available {
-  background: #0f766e;
+  background: #71717a;
 }
 
 .status-pill.reading {
-  background: #b45309;
+  background: #52525b;
 }
 
 .status-pill.writing {
-  background: #b91c1c;
+  background: #27272a;
 }
 
 .graph-panel {
@@ -269,7 +266,7 @@ a {
   border-radius: 12px;
   border: 1px solid var(--border);
   overflow: hidden;
-  background: linear-gradient(160deg, #eff6ff 0%, #f8fafc 100%);
+  background: linear-gradient(160deg, #fafafa 0%, #f4f4f5 100%);
 }
 
 .rf-label {
@@ -327,13 +324,13 @@ a {
   padding: 0.45rem 0.5rem;
   display: grid;
   gap: 0.15rem;
-  background: #fafcff;
+  background: #fafafa;
 }
 
 .activity-type {
   text-transform: capitalize;
   font-size: 0.66rem;
-  color: #0f172a;
+  color: #18181b;
   font-weight: 700;
 }
 

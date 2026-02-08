@@ -1,5 +1,12 @@
 import { Buffer } from 'node:buffer';
-import { octokit, parseRepoUrl, getRepoHead } from './github';
+import {
+  getGitHubQuotaErrorMessage,
+  getGitHubQuotaResetMs,
+  getRepoHeadCached,
+  isGitHubQuotaError,
+  octokit,
+  parseRepoUrl,
+} from './github';
 import { kv } from './kv';
 import { getLocks } from './locks';
 import { getFileLanguage, parseImports } from './parser';
@@ -36,7 +43,11 @@ interface RepoFile {
   size?: number;
 }
 
+const HEAD_CHECK_MIN_INTERVAL_MS = 20_000;
+const RATE_LIMIT_FALLBACK_COOLDOWN_MS = 60_000;
+
 export class GraphService {
+  private static inFlight = new Map<string, Promise<DependencyGraph>>();
   private repoUrl: string;
   private branch: string;
   private owner: string;
@@ -56,7 +67,73 @@ export class GraphService {
       graph: `graph:${this.repoUrl}:${this.branch}`,
       meta: `graph:meta:${this.repoUrl}:${this.branch}`,
       fileShas: `graph:file_shas:${this.repoUrl}:${this.branch}`,
+      headCheckedAt: `graph:head_checked_at:${this.repoUrl}:${this.branch}`,
+      rateLimitedUntil: `graph:rate_limited_until:${this.repoUrl}:${this.branch}`,
     };
+  }
+
+  private getInFlightKey(): string {
+    return `${this.repoUrl}:${this.branch}`;
+  }
+
+  private async readNumberKey(key: string): Promise<number | null> {
+    const value = await kv.get(key);
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  }
+
+  private async getRateLimitedUntil(): Promise<number | null> {
+    const keys = this.getKeys();
+    return this.readNumberKey(keys.rateLimitedUntil);
+  }
+
+  private async setRateLimitedUntil(untilMs: number): Promise<void> {
+    const keys = this.getKeys();
+    await kv.set(keys.rateLimitedUntil, untilMs);
+  }
+
+  private async setHeadCheckedAt(timestamp: number): Promise<void> {
+    const keys = this.getKeys();
+    await kv.set(keys.headCheckedAt, timestamp);
+  }
+
+  private async shouldSkipHeadCheck(now: number): Promise<boolean> {
+    const keys = this.getKeys();
+    const lastHeadCheckedAt = await this.readNumberKey(keys.headCheckedAt);
+    if (!lastHeadCheckedAt) {
+      return false;
+    }
+
+    return now - lastHeadCheckedAt < HEAD_CHECK_MIN_INTERVAL_MS;
+  }
+
+  private async applyRateLimitCooldown(error: unknown): Promise<number> {
+    const resetAt =
+      getGitHubQuotaResetMs(error) ?? Date.now() + RATE_LIMIT_FALLBACK_COOLDOWN_MS;
+    const untilMs = Math.max(resetAt, Date.now() + 5_000);
+    await this.setRateLimitedUntil(untilMs);
+    return untilMs;
+  }
+
+  private async withSingleFlight(operation: () => Promise<DependencyGraph>): Promise<DependencyGraph> {
+    const key = this.getInFlightKey();
+    const existing = GraphService.inFlight.get(key);
+    if (existing) {
+      return existing;
+    }
+
+    const promise = operation().finally(() => {
+      GraphService.inFlight.delete(key);
+    });
+
+    GraphService.inFlight.set(key, promise);
+    return promise;
   }
 
   async getCached(): Promise<DependencyGraph | null> {
@@ -78,7 +155,7 @@ export class GraphService {
 
   async needsUpdate(): Promise<{ needsUpdate: boolean; currentHead: string }> {
     const keys = this.getKeys();
-    const currentHead = await getRepoHead(this.owner, this.repo, this.branch);
+    const currentHead = await getRepoHeadCached(this.owner, this.repo, this.branch);
     const storedHead = (await kv.get(keys.meta)) as string | null;
 
     return {
@@ -91,7 +168,12 @@ export class GraphService {
     const keys = this.getKeys();
     const startTime = Date.now();
 
-    const currentHead = await getRepoHead(this.owner, this.repo, this.branch);
+    const currentHead = await getRepoHeadCached(
+      this.owner,
+      this.repo,
+      this.branch,
+      force ? 0 : HEAD_CHECK_MIN_INTERVAL_MS,
+    );
 
     if (!force) {
       const storedHead = (await kv.get(keys.meta)) as string | null;
@@ -218,6 +300,9 @@ export class GraphService {
 
         processedCount += 1;
       } catch (error) {
+        if (isGitHubQuotaError(error)) {
+          throw error;
+        }
         const message = error instanceof Error ? error.message : 'Unknown error';
         console.error(`[Graph] Failed to process ${filePath}:`, message);
       }
@@ -271,18 +356,59 @@ export class GraphService {
   }
 
   async get(forceRegenerate = false): Promise<DependencyGraph> {
-    if (forceRegenerate) {
-      return this.generate(true);
-    }
+    return this.withSingleFlight(async () => {
+      const now = Date.now();
+      const cached = await this.getCached();
+      const rateLimitedUntil = await this.getRateLimitedUntil();
 
-    const cached = await this.getCached();
-    if (cached) {
-      const { needsUpdate } = await this.needsUpdate();
-      if (!needsUpdate) {
-        return cached;
+      if (rateLimitedUntil && rateLimitedUntil > now) {
+        if (cached) {
+          return cached;
+        }
+
+        const retryIso = new Date(rateLimitedUntil).toISOString();
+        const quotaError = new Error(`GitHub API quota exhausted. Try again after ${retryIso}.`);
+        (quotaError as { status?: number }).status = 429;
+        throw quotaError;
       }
-    }
 
-    return this.generate();
+      try {
+        if (forceRegenerate) {
+          return await this.generate(true);
+        }
+
+        if (cached) {
+          const skipHeadCheck = await this.shouldSkipHeadCheck(now);
+          if (skipHeadCheck) {
+            return cached;
+          }
+
+          await this.setHeadCheckedAt(now);
+          const { needsUpdate } = await this.needsUpdate();
+          if (!needsUpdate) {
+            return cached;
+          }
+        }
+
+        return await this.generate();
+      } catch (error) {
+        if (isGitHubQuotaError(error)) {
+          const untilMs = await this.applyRateLimitCooldown(error);
+          const fallback = cached ?? (await this.getCached());
+          if (fallback) {
+            console.warn(
+              `[Graph] GitHub quota exhausted for ${this.repoUrl}@${this.branch}; serving cached graph until ${new Date(untilMs).toISOString()}`,
+            );
+            return fallback;
+          }
+
+          console.warn(
+            `[Graph] GitHub quota exhausted for ${this.repoUrl}@${this.branch}; no cached graph available. ${getGitHubQuotaErrorMessage(error)}`,
+          );
+        }
+
+        throw error;
+      }
+    });
   }
 }

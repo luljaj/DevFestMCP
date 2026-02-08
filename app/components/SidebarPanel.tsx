@@ -1,151 +1,195 @@
-import React, { useMemo } from 'react';
+import React, { UIEvent, useEffect, useMemo, useRef } from 'react';
 import * as ScrollArea from '@radix-ui/react-scroll-area';
 import { Activity, Clock, User } from 'lucide-react';
 import { ActivityEvent, LockEntry } from '../hooks/useGraphData';
-import { getUserColor, getUserColorName } from '../utils/colors';
 
 interface SidebarPanelProps {
     activities: ActivityEvent[];
     locks: Record<string, LockEntry>;
+    isDark: boolean;
 }
 
-export default function SidebarPanel({ activities, locks }: SidebarPanelProps) {
+export default function SidebarPanel({ activities, locks, isDark }: SidebarPanelProps) {
+    const viewportRef = useRef<HTMLDivElement | null>(null);
+    const stickToBottomRef = useRef(true);
 
-    // Derive active developers from locks and recent activity
     const activeDevelopers = useMemo(() => {
-        const devs = new Map<string, { name: string; lockCount: number; lastActive: number }>();
+        const developers = new Map<string, { name: string; lockCount: number; lastActive: number }>();
 
-        // From valid locks
-        Object.values(locks).forEach(lock => {
-            if (!devs.has(lock.user_id)) {
-                devs.set(lock.user_id, { name: lock.user_name, lockCount: 0, lastActive: lock.timestamp });
+        for (const lock of Object.values(locks)) {
+            if (!developers.has(lock.user_id)) {
+                developers.set(lock.user_id, {
+                    name: lock.user_name,
+                    lockCount: 0,
+                    lastActive: lock.timestamp,
+                });
             }
-            const dev = devs.get(lock.user_id)!;
-            dev.lockCount++;
-            dev.lastActive = Math.max(dev.lastActive, lock.timestamp);
-        });
 
-        // From recent activity (if not in locks)
-        activities.forEach(act => {
-            // We don't have user_id in activity easily unless we parse it or change backend, 
-            // but let's assume userName is unique enough for display or we used user_id in checking
-            // For now, let's just use the locks for the "Connected Developers" list to be accurate to "Active Agents"
-        });
+            const current = developers.get(lock.user_id)!;
+            current.lockCount += 1;
+            current.lastActive = Math.max(current.lastActive, lock.timestamp);
+        }
 
-        return Array.from(devs.entries()).map(([id, data]) => ({ id, ...data }));
+        for (const event of activities.slice(-60)) {
+            const key = event.userId || event.userName;
+            if (!developers.has(key)) {
+                developers.set(key, { name: event.userName, lockCount: 0, lastActive: event.timestamp });
+                continue;
+            }
+            const current = developers.get(key)!;
+            current.lastActive = Math.max(current.lastActive, event.timestamp);
+        }
+
+        return Array.from(developers.entries())
+            .map(([id, data]) => ({ id, ...data }))
+            .sort((a, b) => b.lockCount - a.lockCount || b.lastActive - a.lastActive);
     }, [locks, activities]);
 
-    return (
-        <div className="h-full flex flex-col bg-white border-l border-slate-200 shadow-xl z-20">
+    useEffect(() => {
+        const viewport = viewportRef.current;
+        if (!viewport || !stickToBottomRef.current) {
+            return;
+        }
 
-            {/* Top Section: Connected Developers */}
-            <div className="p-4 border-b border-slate-100 bg-slate-50/50">
-                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                    <User className="w-3 h-3" />
+        viewport.scrollTop = viewport.scrollHeight;
+    }, [activities]);
+
+    const onViewportScroll = (event: UIEvent<HTMLDivElement>) => {
+        const target = event.currentTarget;
+        const distanceToBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+        stickToBottomRef.current = distanceToBottom < 28;
+    };
+
+    return (
+        <div className={`z-20 flex h-full flex-col rounded-l-[24px] border-l backdrop-blur-md ${isDark ? 'border-zinc-700 bg-zinc-900/85' : 'border-zinc-200 bg-white/80'}`}>
+            <section className={`shrink-0 border-b p-4 ${isDark ? 'border-zinc-700/80 bg-zinc-900/65' : 'border-zinc-200/80 bg-zinc-50/70'}`}>
+                <h3 className={`mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                    <User className="h-3 w-3" />
                     Active Agents ({activeDevelopers.length})
                 </h3>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2">
                     {activeDevelopers.map(dev => {
-                        const colors = getUserColor(dev.id);
+                        const railColor = neutralTone(dev.id);
                         return (
-                            <div key={dev.id} className="flex items-center gap-2 p-2 rounded-lg bg-white border border-slate-200 shadow-sm relative overflow-hidden group">
-                                <div className="absolute left-0 top-0 bottom-0 w-1 transition-colors" style={{ backgroundColor: Object.values(colors)[8] }} />
-                                <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-xs font-bold shrink-0 text-slate-600">
+                            <article key={dev.id} className={`relative flex items-center gap-3 overflow-hidden rounded-xl border px-3 py-2 shadow-sm ${isDark ? 'border-zinc-700 bg-zinc-800/80' : 'border-zinc-200 bg-white'}`}>
+                                <div className="absolute bottom-0 left-0 top-0 w-1" style={{ backgroundColor: railColor }} />
+                                <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${isDark ? 'border-zinc-700 bg-zinc-700 text-zinc-100' : 'border-zinc-200 bg-zinc-100 text-zinc-700'}`}>
                                     {dev.name.charAt(0)}
                                 </div>
-                                <div className="overflow-hidden">
-                                    <div className="text-xs font-bold text-slate-700 truncate">{dev.name}</div>
-                                    <div className="text-[10px] text-slate-400 flex items-center gap-1">
-                                        <span className={dev.lockCount > 0 ? 'text-amber-600 font-semibold' : ''}>{dev.lockCount} Locks</span>
+                                <div className="min-w-0 flex-1 overflow-hidden">
+                                    <div className={`truncate text-xs font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-800'}`}>{dev.name}</div>
+                                    <div className={`text-[10px] ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                                        Last active {relativeTime(dev.lastActive)}
                                     </div>
                                 </div>
-                            </div>
+                                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${isDark ? 'border-zinc-700 bg-zinc-700/80 text-zinc-200' : 'border-zinc-200 bg-zinc-100 text-zinc-700'}`}>
+                                    {dev.lockCount}
+                                </span>
+                            </article>
                         );
                     })}
+
                     {activeDevelopers.length === 0 && (
-                        <div className="col-span-2 text-xs text-slate-400 italic text-center py-4">
+                        <div className={`py-4 text-center text-xs italic ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
                             No active agents connected.
                         </div>
                     )}
                 </div>
-            </div>
+            </section>
 
-            {/* Bottom Section: Activity Feed */}
-            <div className="flex-1 overflow-hidden flex flex-col relative">
-                <div className="p-3 bg-white border-b border-slate-100 flex items-center justify-between z-10">
-                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                        <Activity className="w-3 h-3" />
+            <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+                <div className={`z-10 flex items-center justify-between border-b p-3 backdrop-blur-md ${isDark ? 'border-zinc-700 bg-zinc-900/70' : 'border-zinc-100 bg-white/80'}`}>
+                    <h3 className={`flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                        <Activity className="h-3 w-3" />
                         Live Feed
                     </h3>
-                    <span className="text-[10px] text-slate-400 bg-slate-50 px-2 py-0.5 rounded-full">Real-time</span>
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] ${isDark ? 'border-zinc-700 bg-zinc-800 text-zinc-400' : 'border-zinc-200 bg-zinc-50 text-zinc-500'}`}>
+                        Real-time
+                    </span>
                 </div>
 
-                <ScrollArea.Root className="flex-1 w-full h-full overflow-hidden bg-slate-50/30">
-                    <ScrollArea.Viewport className="w-full h-full p-4 space-y-4">
+                <ScrollArea.Root className={`h-full w-full flex-1 overflow-hidden ${isDark ? 'bg-zinc-900/50' : 'bg-zinc-50/40'}`}>
+                    <ScrollArea.Viewport ref={viewportRef} className="h-full w-full p-4" onScroll={onViewportScroll}>
                         {activities.map((activity) => {
-                            // Try to generate a color from the user name or ID (simulated since activity doesn't have ID yet in this version, or update backend)
-                            // We'll hash the userName for now
-                            const userColor = getUserColor(activity.userName);
-                            const timeAgo = relativeTime(activity.timestamp);
+                            const railColor = neutralTone(activity.userId || activity.userName);
+                            const description = actionDescription(activity);
 
                             return (
-                                <div key={activity.id} className="relative pl-4 group">
-                                    <div
-                                        className="absolute left-0 top-2 bottom-0 w-0.5 rounded-full transition-colors group-hover:w-1"
-                                        style={{ backgroundColor: Object.values(userColor)[8] }}
-                                    />
-
-                                    <div className="flex items-baseline justify-between mb-0.5">
-                                        <span
-                                            className="text-xs font-bold truncate max-w-[120px]"
-                                            style={{ color: Object.values(userColor)[10] }}
-                                        >
-                                            {activity.userName}
-                                        </span>
-                                        <span className="text-[10px] text-slate-400 flex items-center gap-1">
-                                            <Clock className="w-2.5 h-2.5" />
-                                            {timeAgo}
-                                        </span>
-                                    </div>
-
-                                    <div className="text-xs text-slate-600 leading-snug">
-                                        <span className="font-medium">
-                                            {activity.type === 'lock_acquired' ? 'Available' :
-                                                activity.type === 'lock_released' ? 'Finished' : 'Updated'}
-                                        </span>
-                                        <span className="mx-1 text-slate-400">&bull;</span>
-                                        <code className="bg-slate-100 text-slate-600 px-1 py-0.5 rounded border border-slate-200 text-[10px]">{activity.filePath}</code>
-                                    </div>
-
-                                    {activity.message && (
-                                        <div className="mt-1.5 text-xs text-slate-500 bg-white p-2 rounded border border-slate-100 shadow-sm italic relative">
-                                            "{activity.message}"
-                                            <div className="absolute -top-1 left-3 w-2 h-2 bg-white border-t border-l border-slate-100 rotate-45" />
+                                <article key={activity.id} className={`mb-3 flex gap-3 rounded-xl border px-3 py-2 shadow-sm ${isDark ? 'border-zinc-700 bg-zinc-800/85' : 'border-zinc-200 bg-white/90'}`}>
+                                    <div className="w-1 shrink-0 rounded-full" style={{ backgroundColor: railColor }} />
+                                    <div className="min-w-0 flex-1">
+                                        <div className="mb-1 flex items-center justify-between gap-2">
+                                            <span className={`truncate text-xs font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-800'}`}>
+                                                {activity.userName}
+                                            </span>
+                                            <span className={`flex shrink-0 items-center gap-1 text-[10px] ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                                                <Clock className="h-3 w-3" />
+                                                {relativeTime(activity.timestamp)}
+                                            </span>
                                         </div>
-                                    )}
-                                </div>
+
+                                        <p className={`text-xs leading-snug ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}>
+                                            {description}{' '}
+                                            <code className={`rounded border px-1 py-0.5 text-[10px] ${isDark ? 'border-zinc-600 bg-zinc-700 text-zinc-200' : 'border-zinc-200 bg-zinc-100 text-zinc-700'}`}>
+                                                {activity.filePath}
+                                            </code>
+                                        </p>
+
+                                        {activity.message && (
+                                            <div className={`mt-1.5 rounded-md border px-2 py-1 text-[11px] italic ${isDark ? 'border-zinc-700 bg-zinc-900 text-zinc-400' : 'border-zinc-100 bg-zinc-50 text-zinc-500'}`}>
+                                                "{activity.message}"
+                                            </div>
+                                        )}
+                                    </div>
+                                </article>
                             );
                         })}
 
                         {activities.length === 0 && (
-                            <div className="text-center py-10 text-slate-400 text-xs">
+                            <div className={`py-10 text-center text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
                                 No recent activity recorded.
                             </div>
                         )}
                     </ScrollArea.Viewport>
-                    <ScrollArea.Scrollbar orientation="vertical" className="flex select-none touch-none p-0.5 bg-slate-100 transition-colors duration-[160ms] ease-out hover:bg-slate-200 data-[orientation=vertical]:w-2.5 data-[orientation=horizontal]:flex-col data-[orientation=horizontal]:h-2.5">
-                        <ScrollArea.Thumb className="flex-1 bg-slate-300 rounded-[10px] relative before:content-[''] before:absolute before:top-1/2 before:left-1/2 before:-translate-x-1/2 before:-translate-y-1/2 before:w-full before:h-full before:min-w-[44px] before:min-h-[44px]" />
+
+                    <ScrollArea.Scrollbar orientation="vertical" className={`flex w-2.5 select-none touch-none p-0.5 transition-colors duration-150 ${isDark ? 'bg-zinc-800 hover:bg-zinc-700' : 'bg-zinc-100 hover:bg-zinc-200'}`}>
+                        <ScrollArea.Thumb className={`relative flex-1 rounded-[10px] before:absolute before:left-1/2 before:top-1/2 before:h-full before:min-h-[44px] before:min-w-[44px] before:w-full before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] ${isDark ? 'bg-zinc-600' : 'bg-zinc-300'}`} />
                     </ScrollArea.Scrollbar>
                 </ScrollArea.Root>
-            </div>
+            </section>
         </div>
     );
 }
 
 function relativeTime(timestamp: number): string {
     const delta = Date.now() - timestamp;
-    if (delta < 1000 * 60) return `${Math.floor(delta / 1000)}s`;
-    if (delta < 1000 * 60 * 60) return `${Math.floor(delta / (1000 * 60))}m`;
-    return `${Math.floor(delta / (1000 * 60 * 60))}h`;
+    if (delta < 1000 * 30) return 'now';
+    if (delta < 1000 * 60 * 60) return `${Math.max(1, Math.floor(delta / (1000 * 60)))}m`;
+    if (delta < 1000 * 60 * 60 * 24) return `${Math.floor(delta / (1000 * 60 * 60))}h`;
+    return `${Math.floor(delta / (1000 * 60 * 60 * 24))}d`;
+}
+
+function actionDescription(activity: ActivityEvent): string {
+    switch (activity.type) {
+        case 'lock_acquired':
+            return 'started working on';
+        case 'lock_released':
+            return 'finished';
+        case 'message_updated':
+            return 'updated intent for';
+        case 'lock_reassigned':
+            return 'reassigned work on';
+        default:
+            return 'touched';
+    }
+}
+
+function neutralTone(seed: string): string {
+    const tones = ['#3f3f46', '#52525b', '#71717a', '#a1a1aa'];
+    let hash = 0;
+    for (let index = 0; index < seed.length; index += 1) {
+        hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
+    }
+    return tones[hash % tones.length];
 }

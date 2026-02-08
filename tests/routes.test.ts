@@ -3,8 +3,10 @@ import { describe, expect, test, vi } from 'vitest';
 vi.mock('@/lib/github', () => ({
   parseRepoUrl: vi.fn(() => ({ owner: 'test', repo: 'repo' })),
   getRepoHead: vi.fn(async () => 'remote-head'),
+  getRepoHeadCached: vi.fn(async () => 'remote-head'),
   isGitHubQuotaError: vi.fn(() => false),
   getGitHubQuotaErrorMessage: vi.fn(() => 'GitHub API quota exhausted.'),
+  getGitHubQuotaResetMs: vi.fn(() => Date.now() + 60_000),
 }));
 
 vi.mock('@/lib/locks', () => ({
@@ -18,10 +20,10 @@ import { GET as graphGet } from '@/app/api/graph/route';
 import { POST as checkStatusPost } from '@/app/api/check_status/route';
 import { GET as cleanupGet } from '@/app/api/cleanup_stale_locks/route';
 import { POST as postStatusPost } from '@/app/api/post_status/route';
-import { getRepoHead } from '@/lib/github';
+import { getRepoHeadCached } from '@/lib/github';
 import { acquireLocks, checkLocks } from '@/lib/locks';
 
-const mockedGetRepoHead = vi.mocked(getRepoHead);
+const mockedGetRepoHead = vi.mocked(getRepoHeadCached);
 const mockedCheckLocks = vi.mocked(checkLocks);
 const mockedAcquireLocks = vi.mocked(acquireLocks);
 

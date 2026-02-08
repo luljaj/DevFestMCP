@@ -1,5 +1,5 @@
 import React from 'react';
-import { GitBranch, Github, RefreshCw, Search } from 'lucide-react';
+import { Activity, GitBranch, Github, Moon, RefreshCw, Sun, TimerReset } from 'lucide-react';
 
 interface ControlDockProps {
     repoUrl: string;
@@ -8,6 +8,12 @@ interface ControlDockProps {
     setBranch: (branch: string) => void;
     onRefresh: () => void;
     refreshing: boolean;
+    loading: boolean;
+    lastUpdatedAt: number | null;
+    activeLocks: number;
+    pollIntervalMs: number;
+    isDark: boolean;
+    onToggleTheme: () => void;
 }
 
 export default function ControlDock({
@@ -17,47 +23,93 @@ export default function ControlDock({
     setBranch,
     onRefresh,
     refreshing,
+    loading,
+    lastUpdatedAt,
+    activeLocks,
+    pollIntervalMs,
+    isDark,
+    onToggleTheme,
 }: ControlDockProps) {
+    const statusLabel = loading
+        ? 'Initializing'
+        : refreshing
+            ? 'Refreshing'
+            : lastUpdatedAt
+                ? `Synced ${relativeTime(lastUpdatedAt)}`
+                : 'Awaiting data';
+
     return (
-        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 p-2 bg-white/80 backdrop-blur-md border border-white/20 rounded-full shadow-lg hover:shadow-xl transition-all duration-300">
+        <div className={`fixed inset-x-0 top-0 z-[85] border-b rounded-b-2xl ${isDark ? 'border-zinc-800 bg-black/95 text-zinc-100' : 'border-zinc-200 bg-white/95 text-zinc-900'}`}>
+            <div className="mx-auto flex h-12 w-full max-w-[1800px] items-center gap-2 px-3 md:px-4">
+                <div className={`flex min-w-0 items-center gap-2 border rounded-lg px-2 py-1 ${isDark ? 'border-zinc-700 bg-zinc-950' : 'border-zinc-200 bg-zinc-50'}`}>
+                    <Github className={`h-3.5 w-3.5 shrink-0 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`} />
+                    <input
+                        value={repoUrl}
+                        onChange={(e) => setRepoUrl(e.target.value)}
+                        className={`w-36 border-none bg-transparent text-xs outline-none md:w-64 ${isDark ? 'text-zinc-100 placeholder:text-zinc-500' : 'text-zinc-700 placeholder:text-zinc-400'}`}
+                        placeholder="github.com/owner/repo"
+                    />
+                </div>
 
-            <div className="flex items-center gap-2 px-3 py-1 bg-slate-100/50 rounded-full border border-slate-200/50">
-                <Github className="w-4 h-4 text-slate-500" />
-                <input
-                    value={repoUrl}
-                    onChange={(e) => setRepoUrl(e.target.value)}
-                    className="bg-transparent border-none outline-none text-sm text-slate-700 w-48 placeholder:text-slate-400"
-                    placeholder="github.com/owner/repo"
-                />
+                <div className={`flex items-center gap-2 border rounded-lg px-2 py-1 ${isDark ? 'border-zinc-700 bg-zinc-950' : 'border-zinc-200 bg-zinc-50'}`}>
+                    <GitBranch className={`h-3.5 w-3.5 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`} />
+                    <input
+                        value={branch}
+                        onChange={(e) => setBranch(e.target.value)}
+                        className={`w-16 border-none bg-transparent text-xs outline-none ${isDark ? 'text-zinc-100 placeholder:text-zinc-500' : 'text-zinc-700 placeholder:text-zinc-400'}`}
+                        placeholder="main"
+                    />
+                </div>
+
+                <div className={`hidden items-center gap-1 border rounded-lg px-2 py-1 text-[11px] md:flex ${isDark ? 'border-zinc-700 bg-zinc-950 text-zinc-300' : 'border-zinc-200 bg-zinc-50 text-zinc-600'}`}>
+                    <span
+                        className={`h-2 w-2 rounded-full ${refreshing ? 'animate-pulse' : ''}`}
+                        style={{ backgroundColor: isDark ? '#a1a1aa' : '#71717a' }}
+                    />
+                    {statusLabel}
+                </div>
+
+                <div className={`hidden items-center gap-1 border rounded-lg px-2 py-1 text-[11px] sm:flex ${isDark ? 'border-zinc-700 bg-zinc-950 text-zinc-300' : 'border-zinc-200 bg-zinc-50 text-zinc-600'}`}>
+                    <TimerReset className={`h-3 w-3 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`} />
+                    {Math.round(pollIntervalMs / 1000)}s
+                </div>
+
+                <div className={`hidden items-center gap-1 border rounded-lg px-2 py-1 text-[11px] sm:flex ${isDark ? 'border-zinc-700 bg-zinc-950 text-zinc-300' : 'border-zinc-200 bg-zinc-50 text-zinc-600'}`}>
+                    <Activity className={`h-3 w-3 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`} />
+                    {activeLocks}
+                </div>
+
+                <div className="ml-auto flex items-center gap-1">
+                    <button
+                        onClick={onToggleTheme}
+                        className={`h-8 w-8 border rounded-lg transition-colors ${isDark ? 'border-zinc-700 text-zinc-300 hover:bg-zinc-900' : 'border-zinc-200 text-zinc-600 hover:bg-zinc-100'}`}
+                        title="Toggle dark mode"
+                        aria-label="Toggle dark mode"
+                    >
+                        {isDark ? <Sun className="mx-auto h-4 w-4" /> : <Moon className="mx-auto h-4 w-4" />}
+                    </button>
+
+                    <button
+                        onClick={onRefresh}
+                        className={`h-8 w-8 border rounded-lg transition-colors ${isDark ? 'border-zinc-700 text-zinc-300 hover:bg-zinc-900' : 'border-zinc-200 text-zinc-600 hover:bg-zinc-100'} ${refreshing ? 'animate-spin' : ''}`}
+                        title="Refresh graph"
+                        aria-label="Refresh graph"
+                    >
+                        <RefreshCw className="mx-auto h-4 w-4" />
+                    </button>
+                </div>
             </div>
-
-            <div className="flex items-center gap-2 px-3 py-1 bg-slate-100/50 rounded-full border border-slate-200/50">
-                <GitBranch className="w-4 h-4 text-slate-500" />
-                <input
-                    value={branch}
-                    onChange={(e) => setBranch(e.target.value)}
-                    className="bg-transparent border-none outline-none text-sm text-slate-700 w-24 placeholder:text-slate-400"
-                    placeholder="main"
-                />
-            </div>
-
-            <div className="h-6 w-px bg-slate-200 mx-1" />
-
-            <button
-                onClick={onRefresh}
-                className={`p-2 rounded-full hover:bg-slate-100 transition-colors ${refreshing ? 'animate-spin text-indigo-600' : 'text-slate-600'}`}
-                title="Refresh Graph"
-            >
-                <RefreshCw className="w-4 h-4" />
-            </button>
-
-            <button
-                className="p-2 rounded-full hover:bg-slate-100 text-slate-600 transition-colors"
-                title="Global Search (Coming Soon)"
-            >
-                <Search className="w-4 h-4" />
-            </button>
-
         </div>
     );
+}
+
+function relativeTime(timestamp: number): string {
+    const diff = Date.now() - timestamp;
+    if (diff < 30_000) {
+        return 'just now';
+    }
+    if (diff < 60 * 60 * 1000) {
+        return `${Math.max(1, Math.floor(diff / 60_000))}m ago`;
+    }
+    return `${Math.floor(diff / (60 * 60 * 1000))}h ago`;
 }

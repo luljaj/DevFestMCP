@@ -1,25 +1,25 @@
 'use client';
 
-import { FormEvent, useMemo, useState } from 'react';
-import ReactFlow, {
-  Background,
-  Controls,
-  MarkerType,
-  MiniMap,
-  type Edge,
-  type Node,
-  type NodeMouseHandler,
-} from 'reactflow';
-import 'reactflow/dist/style.css';
-import { useGraphData, DependencyGraph, LockEntry, ActivityEvent } from './hooks/useGraphData';
+import { useEffect, useRef, useState } from 'react';
+import { PanelRightOpen, X } from 'lucide-react';
+import { useGraphData } from './hooks/useGraphData';
 import GraphPanel from './components/GraphPanel';
 import SidebarPanel from './components/SidebarPanel';
+import AdminPanel from './components/AdminPanel';
 
-// =========================================================================================
-// NEW UI IMPLEMENTATION
-// =========================================================================================
+const DEFAULT_REFRESH_INTERVAL_MS = 30_000;
+const MIN_REFRESH_INTERVAL_MS = 5_000;
+const MAX_REFRESH_INTERVAL_MS = 300_000;
 
 export default function HomePage() {
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [adminPanelOpen, setAdminPanelOpen] = useState(false);
+  const [isDark, setIsDark] = useState(false);
+  const [refreshIntervalMs, setRefreshIntervalMs] = useState(DEFAULT_REFRESH_INTERVAL_MS);
+  const [preferencesHydrated, setPreferencesHydrated] = useState(false);
+  const pressedKeysRef = useRef<Set<string>>(new Set());
+  const comboUsedRef = useRef(false);
+
   const {
     graph,
     repoUrl,
@@ -31,27 +31,124 @@ export default function HomePage() {
     refreshing,
     loading,
     error,
-  } = useGraphData();
+    lastUpdatedAt,
+    isUsingImportedGraph,
+    importGraphFromJson,
+    clearImportedGraph,
+    exportGraphJson,
+  } = useGraphData({ pollIntervalMs: refreshIntervalMs });
 
-  const locks = graph?.locks || {};
+  const locks = graph?.locks ?? {};
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const storedTheme = window.localStorage.getItem('devfest_theme');
+    if (storedTheme === 'dark') {
+      setIsDark(true);
+    } else if (storedTheme === 'light') {
+      setIsDark(false);
+    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      setIsDark(true);
+    }
+
+    const storedInterval = Number.parseInt(window.localStorage.getItem('devfest_refresh_interval_ms') ?? '', 10);
+    if (Number.isFinite(storedInterval)) {
+      setRefreshIntervalMs(normalizeRefreshInterval(storedInterval));
+    }
+
+    setPreferencesHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    document.documentElement.classList.toggle('dark', isDark);
+
+    if (!preferencesHydrated) {
+      return;
+    }
+
+    window.localStorage.setItem('devfest_theme', isDark ? 'dark' : 'light');
+    window.localStorage.setItem('devfest_refresh_interval_ms', String(refreshIntervalMs));
+  }, [isDark, refreshIntervalMs, preferencesHydrated]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      pressedKeysRef.current.add(event.code);
+      const comboActive = isAdminComboPressed(pressedKeysRef.current, event.shiftKey);
+      if (!comboActive || comboUsedRef.current) {
+        return;
+      }
+
+      comboUsedRef.current = true;
+      setAdminPanelOpen((previous) => !previous);
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      pressedKeysRef.current.delete(event.code);
+      if (!isAdminComboPressed(pressedKeysRef.current, false)) {
+        comboUsedRef.current = false;
+      }
+    };
+
+    const onBlur = () => {
+      pressedKeysRef.current.clear();
+      comboUsedRef.current = false;
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
+
+  const onRefreshIntervalChange = (value: number) => {
+    setRefreshIntervalMs(normalizeRefreshInterval(value));
+  };
+
+  const onImportGraphJson = (json: string): string | null => {
+    const result = importGraphFromJson(json);
+    return result.error;
+  };
+
+  const onExportGraph = () => {
+    const payload = exportGraphJson();
+    if (!payload || typeof window === 'undefined') {
+      return;
+    }
+
+    const blob = new Blob([payload], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const downloadLink = document.createElement('a');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+    downloadLink.href = url;
+    downloadLink.download = `dependency-graph-${timestamp}.json`;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+    URL.revokeObjectURL(url);
+  };
 
   return (
-    <main className="flex h-screen w-screen overflow-hidden bg-slate-50 font-sans text-slate-900">
+    <main className={`relative flex h-screen w-screen overflow-hidden pt-12 ${isDark ? 'bg-black text-zinc-100' : 'bg-zinc-50 text-zinc-900'}`}>
+      {error && (
+        <div className={`absolute left-1/2 top-14 z-[70] w-[min(96vw,680px)] -translate-x-1/2 border px-4 py-2 text-sm font-medium shadow-lg ${isDark ? 'border-zinc-700 bg-zinc-900/95 text-zinc-200' : 'border-zinc-300 bg-white text-zinc-700'}`}>
+          Error: {error}
+        </div>
+      )}
 
-      {/* Main Graph Area */}
-      <section className="flex-1 relative h-full flex flex-col">
-        {error && (
-          <div className="absolute top-20 left-1/2 -translate-x-1/2 bg-red-100 border border-red-300 text-red-800 px-4 py-2 rounded-lg z-50 text-sm shadow-lg font-medium">
-            Error: {error}
-          </div>
-        )}
-
-        {loading && !graph && (
-          <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-50 backdrop-blur-sm">
-            <div className="animate-pulse text-slate-400 font-semibold tracking-wide">Initializing Mission Control...</div>
-          </div>
-        )}
-
+      <section className="relative h-full flex-1 p-3 pb-4 md:p-4 md:pb-5 lg:pr-2">
         <GraphPanel
           graph={graph}
           repoUrl={repoUrl}
@@ -60,154 +157,73 @@ export default function HomePage() {
           setBranch={setBranch}
           onRefresh={() => fetchGraph({ regenerate: true })}
           refreshing={refreshing}
+          loading={loading}
+          lastUpdatedAt={lastUpdatedAt}
+          pollIntervalMs={refreshIntervalMs}
+          isDark={isDark}
+          onToggleTheme={() => setIsDark((previous) => !previous)}
+        />
+
+        <AdminPanel
+          open={adminPanelOpen}
+          onClose={() => setAdminPanelOpen(false)}
+          isDark={isDark}
+          onToggleTheme={() => setIsDark((previous) => !previous)}
+          refreshIntervalMs={refreshIntervalMs}
+          onRefreshIntervalChange={onRefreshIntervalChange}
+          onImportGraphJson={onImportGraphJson}
+          onExportGraph={onExportGraph}
+          onClearImportedGraph={clearImportedGraph}
+          isUsingImportedGraph={isUsingImportedGraph}
+          hasGraph={!!graph}
         />
       </section>
 
-      {/* Right Sidebar */}
-      <aside className="w-[320px] h-full shrink-0 relative shadow-2xl z-40">
-        <SidebarPanel activities={activities} locks={locks} />
+      <aside className="hidden h-full w-[350px] shrink-0 p-4 pl-2 lg:block">
+        <SidebarPanel activities={activities} locks={locks} isDark={isDark} />
       </aside>
 
+      <button
+        className={`absolute right-4 top-14 z-[75] border p-2 shadow-lg backdrop-blur-sm lg:hidden ${isDark ? 'border-zinc-700 bg-zinc-900/90 text-zinc-200' : 'border-zinc-200 bg-white/90 text-zinc-700'}`}
+        onClick={() => setMobileSidebarOpen(true)}
+        aria-label="Open activity sidebar"
+      >
+        <PanelRightOpen className="h-5 w-5" />
+      </button>
+
+      {mobileSidebarOpen && (
+        <div className="fixed inset-0 z-[80] lg:hidden">
+          <button
+            className={`absolute inset-0 ${isDark ? 'bg-black/65' : 'bg-zinc-900/40'} backdrop-blur-[1px]`}
+            onClick={() => setMobileSidebarOpen(false)}
+            aria-label="Close sidebar backdrop"
+          />
+
+          <div className="absolute right-0 top-0 h-full w-[90vw] max-w-[360px] py-2 pr-2">
+            <button
+              className={`absolute left-3 top-3 z-[81] border p-1 shadow ${isDark ? 'border-zinc-700 bg-zinc-900 text-zinc-200' : 'border-zinc-200 bg-white text-zinc-600'}`}
+              onClick={() => setMobileSidebarOpen(false)}
+              aria-label="Close activity sidebar"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <SidebarPanel activities={activities} locks={locks} isDark={isDark} />
+          </div>
+        </div>
+      )}
     </main>
   );
 }
 
-// =========================================================================================
-// OLD UI IMPLEMENTATION (PRESERVED)
-// =========================================================================================
-
-/*
-interface GraphNode {
-  id: string;
-  type: 'file';
-  size?: number;
-  language?: string;
+function isAdminComboPressed(pressed: Set<string>, shiftKey: boolean): boolean {
+  const hasShift = shiftKey || pressed.has('ShiftLeft') || pressed.has('ShiftRight');
+  return hasShift && pressed.has('KeyA') && pressed.has('Digit1');
 }
 
-interface GraphEdge {
-  source: string;
-  target: string;
-  type: 'import';
+function normalizeRefreshInterval(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_REFRESH_INTERVAL_MS;
+  }
+
+  return Math.min(MAX_REFRESH_INTERVAL_MS, Math.max(MIN_REFRESH_INTERVAL_MS, Math.round(value)));
 }
-
-interface LockEntry {
-  user_id: string;
-  user_name: string;
-  status: 'READING' | 'WRITING';
-  message: string;
-  timestamp: number;
-  expiry: number;
-}
-
-interface DependencyGraph {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-  locks: Record<string, LockEntry>;
-  version: string;
-  metadata: {
-    generated_at: number;
-    files_processed: number;
-    edges_found: number;
-  };
-}
-
-type StatusFilter = 'ALL' | 'AVAILABLE' | 'READING' | 'WRITING';
-
-type ActivityEvent = {
-  id: string;
-  type: 'lock_acquired' | 'lock_released' | 'lock_reassigned';
-  filePath: string;
-  userName: string;
-  message: string;
-  timestamp: number;
-};
-
-type NodeData = {
-  label: React.ReactNode;
-};
-
-const initialRepo = 'github.com/luljaj/relayfrontend';
-const initialBranch = 'master';
-
-// Renamed to avoid export conflict with new HomePage
-function OldHomePage() {
-  const [repoUrl, setRepoUrl] = useState(initialRepo);
-  const [branch, setBranch] = useState(initialBranch);
-  const [graph, setGraph] = useState<DependencyGraph | null>(null);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
-  const [activities, setActivities] = useState<ActivityEvent[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // ... (Logic removed/commented since it's now in useGraphData, but keeping types above for reference)
-  // To restore, one would copy back the logic from the original file or useGraphData
-  
-  return (
-    <main className="dashboard-shell">
-        <section className="panel controls-panel">
-            <div>
-            <h1 className="title">Relay Coordination Graph</h1>
-            <p className="subtitle">
-                Polling <code>/api/graph</code> every 5 seconds with lock overlays and dependency links.
-            </p>
-            </div>
-            {/* ... Old JSX ... * /}
-        </section>
-        {/* ... Rest of Old JSX ... * /}
-    </main>
-  );
-}
-
-function MetricCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <article className="panel metric-card">
-      <span className="metric-label">{label}</span>
-      <strong className="metric-value">{value}</strong>
-    </article>
-  );
-}
-
-function fileName(path: string): string {
-    const index = path.lastIndexOf('/');
-    return index >= 0 ? path.slice(index + 1) : path;
-}
-  
-function getNodeColors(lock: LockEntry | undefined, selected: boolean): {
-    background: string;
-    border: string;
-    text: string;
-} {
-    if (!lock) {
-        return {
-        background: selected ? '#d1fae5' : '#ecfdf5',
-        border: selected ? '#047857' : '#10b981',
-        text: '#064e3b',
-        };
-    }
-
-    if (lock.status === 'WRITING') {
-        return {
-        background: selected ? '#fee2e2' : '#fef2f2',
-        border: selected ? '#b91c1c' : '#ef4444',
-        text: '#7f1d1d',
-        };
-    }
-
-    return {
-        background: selected ? '#fef3c7' : '#fffbeb',
-        border: selected ? '#b45309' : '#f59e0b',
-        text: '#78350f',
-        };
-}
-
-function relativeTime(timestamp: number): string {
-    const delta = Date.now() - timestamp;
-    if (delta < 1000 * 30) return 'just now';
-    if (delta < 1000 * 60) return `${Math.floor(delta / 1000)}s ago`;
-    if (delta < 1000 * 60 * 60) return `${Math.floor(delta / (1000 * 60))}m ago`;
-    return `${Math.floor(delta / (1000 * 60 * 60))}h ago`;
-}
-*/

@@ -1,9 +1,7 @@
 import React, { memo } from 'react';
 import { BaseEdge, EdgeProps, getSmoothStepPath } from 'reactflow';
-import { getUserColor } from '../utils/colors';
 
 const DependencyEdge = ({
-    id,
     sourceX,
     sourceY,
     targetX,
@@ -24,12 +22,8 @@ const DependencyEdge = ({
     });
 
     const isNew = data?.isNew;
-    const createdBy = data?.createdBy; // userId
-    const userColor = createdBy ? getUserColor(createdBy) : null;
-
-    const strokeColor = isNew && userColor
-        ? Object.values(userColor)[8]
-        : style.stroke || '#94a3b8'; // default slate-400
+    const strokeColor = normalizeStroke(style.stroke);
+    const baseWidth = typeof style.strokeWidth === 'number' ? style.strokeWidth : 1.2;
 
     return (
         <>
@@ -39,12 +33,21 @@ const DependencyEdge = ({
                 style={{
                     ...style,
                     stroke: strokeColor,
-                    strokeWidth: isNew ? 2 : 1,
-                    transition: 'stroke 2s ease-out, stroke-width 2s ease-out',
+                    strokeWidth: isNew ? Math.max(2, baseWidth) : baseWidth,
+                    strokeDasharray: isNew ? '6 4' : undefined,
+                    filter: isNew ? `drop-shadow(0 0 2px ${strokeColor})` : 'none',
+                    transition: 'stroke 1.8s ease-out, stroke-width 1.8s ease-out, filter 1.8s ease-out',
                 }}
             />
         </>
     );
 };
+
+function normalizeStroke(value: unknown): string {
+    if (typeof value === 'string') {
+        return value;
+    }
+    return '#a1a1aa';
+}
 
 export default memo(DependencyEdge);

@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getGitHubQuotaErrorMessage, getRepoHead, isGitHubQuotaError, parseRepoUrl } from '@/lib/github';
+import {
+  getGitHubQuotaErrorMessage,
+  getGitHubQuotaResetMs,
+  getRepoHeadCached,
+  isGitHubQuotaError,
+  parseRepoUrl,
+} from '@/lib/github';
 import { acquireLocks, releaseLocks } from '@/lib/locks';
 import {
   getMissingFields,
@@ -43,7 +49,7 @@ export async function POST(request: NextRequest) {
     const userName = request.headers.get('x-github-username') || 'Anonymous';
 
     const { owner, repo } = parseRepoUrl(repoUrl);
-    const repoHead = await getRepoHead(owner, repo, branch);
+    const repoHead = await getRepoHeadCached(owner, repo, branch);
 
     if (status === 'OPEN') {
       if (isNonEmptyString(newRepoHead) && isNonEmptyString(agentHead) && newRepoHead === agentHead) {
@@ -136,10 +142,12 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     if (isGitHubQuotaError(error)) {
+      const retryAtMs = getGitHubQuotaResetMs(error);
       return NextResponse.json(
         {
           error: 'GitHub API rate limit exceeded',
           details: getGitHubQuotaErrorMessage(error),
+          retry_after_ms: retryAtMs ?? undefined,
         },
         { status: 429 },
       );
