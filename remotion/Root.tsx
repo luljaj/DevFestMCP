@@ -1,8 +1,8 @@
 import { Composition } from 'remotion';
 import { HeroVideo } from './compositions/HeroVideo';
-import { LockCoordinationDemo } from './compositions/LockCoordinationDemo';
-import { ConflictDetectionDemo } from './compositions/ConflictDetectionDemo';
-import { MCPIntegrationDemo } from './compositions/MCPIntegrationDemo';
+import { LiveGraphDemo } from './compositions/LiveGraphDemo';
+import { LiveMCPDemo } from './compositions/LiveMCPDemo';
+import { LiveAppDemo } from './compositions/LiveAppDemo';
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -20,36 +20,36 @@ export const RemotionRoot: React.FC = () => {
         }}
       />
       <Composition
-        id="LockCoordinationDemo"
-        component={LockCoordinationDemo}
+        id="LiveGraphDemo"
+        component={LiveGraphDemo}
+        durationInFrames={480}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={{
+          isDark: true,
+        }}
+      />
+      <Composition
+        id="LiveMCPDemo"
+        component={LiveMCPDemo}
         durationInFrames={450}
         fps={30}
         width={1920}
         height={1080}
         defaultProps={{
-          demoType: 'basic',
+          isDark: true,
         }}
       />
       <Composition
-        id="ConflictDetectionDemo"
-        component={ConflictDetectionDemo}
-        durationInFrames={400}
+        id="LiveAppDemo"
+        component={LiveAppDemo}
+        durationInFrames={450}
         fps={30}
         width={1920}
         height={1080}
         defaultProps={{
-          showDependencyGraph: true,
-        }}
-      />
-      <Composition
-        id="MCPIntegrationDemo"
-        component={MCPIntegrationDemo}
-        durationInFrames={350}
-        fps={30}
-        width={1920}
-        height={1080}
-        defaultProps={{
-          showCode: true,
+          isDark: true,
         }}
       />
     </>

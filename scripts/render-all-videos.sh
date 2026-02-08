@@ -15,9 +15,9 @@ mkdir -p "$OUTPUT_DIR"
 # Array of compositions to render
 declare -a compositions=(
   "HeroVideo:01-hero"
-  "LockCoordinationDemo:02-lock-coordination"
-  "ConflictDetectionDemo:03-conflict-detection"
-  "MCPIntegrationDemo:04-mcp-integration"
+  "LiveGraphDemo:02-live-graph"
+  "LiveMCPDemo:03-mcp-integration"
+  "LiveAppDemo:04-full-app-demo"
 )
 
 # Function to render a single composition
