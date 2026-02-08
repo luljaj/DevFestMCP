@@ -8,7 +8,10 @@
 
 We built Relay specifically for the **Dedalus Labs track**, with the initial goal of leveraging their infrastructure for MCP server hosting. During our integration planning, we consulted with the Dedalus Labs team about our architecture requirements for real-time multi-agent coordination.
 
-After productive discussions, the Dedalus Labs team identified that certain expectations around our use case (specifically, open MCP server hosting through their MCP SDK) weren't currently feasible with their infrastructure model. **The Dedalus Labs team was incredibly supportive** and encouraged us to proceed with a Vercel-hosted MCP implementation while maintaining the core principles of their track challenge.
+After productive discussions, the Dedalus Labs team identified that certain expectations around our use case (specifically, open MCP server hosting with third-party non Dedalus Labs agents through their MCP SDK) weren't currently feasible with their infrastructure model. Dedalus Labs' OpenAI-compatible SDK specializes in creating new agentic workflows through one clean API, while our use case was very different. 
+
+
+ **The Dedalus Labs team was incredibly supportive** and encouraged us to proceed with a Vercel-hosted MCP implementation while maintaining the core principles of their track challenge.
 
 **What this means**: We built a production-grade MCP server that demonstrates the power of agent coordination protocols — exactly what the Dedalus Labs track is about — while using infrastructure better suited to our real-time locking requirements. We're deeply grateful to Dedalus Labs for their flexibility and guidance.
 
@@ -16,11 +19,11 @@ After productive discussions, the Dedalus Labs team identified that certain expe
 
 ## 🎯 The Problem
 
-AI coding agents are no longer experimental — they're standard. Teams run Claude Code, Cursor, Cline, and Copilot side by side, and every developer on a team is delegating real work to their own agent. This is great for individual velocity. It's a disaster for team coordination.
+AI coding agents are no longer experimental — they're standard. As of the beginning of 2026, 57% of surveyed enterprises have AI agents running in production, with 30.4% more planning deployment soon (LangChain). Teams run Claude Code, Cursor, Cline, and Copilot side by side, and every developer on a team is delegating real work to their own agent. This is great for individual velocity. It's a disaster for team coordination. 
 
 The issue: **agents can't talk to each other.** Each one operates in total isolation. Developer A's agent has no idea that Developer B's agent is rewriting the same authentication module. Developer C's agent refactors a shared utility while two other agents depend on the old interface. Nobody finds out until PR time, when hours of parallel work collide into merge conflicts, broken builds, and wasted effort.
 
-This isn't a hypothetical — it's the default experience for any team running multiple agents on a shared codebase. And there's no coordination infrastructure to prevent it. Git doesn't solve it. Branch strategies don't solve it. The agents themselves have no protocol for signaling intent, checking availability, or yielding to each other.
+Any team running multiple agents on a shared codebase. And there's no coordination infrastructure to prevent it. Git doesn't solve it. Branch strategies don't solve it. The agents themselves have no protocol for signaling intent, checking availability, or yielding to each other.
 
 **Relay is that protocol.** A shared coordination channel where agents communicate what they're working on, check what's taken, and stay out of each other's way — automatically, through a native MCP integration.
 
@@ -28,13 +31,26 @@ This isn't a hypothetical — it's the default experience for any team running m
 
 ## 🚀 What Relay Does
 
-Relay gives AI coding agents a shared communication layer so teams can run multiple agents in parallel without collisions.
+Relay gives AI coding agents a shared communication layer and file locking mechanism so teams can run multiple agents in parallel without collisions.
 
 **Lock-Based Coordination**
-Agents claim `READING` or `WRITING` locks before touching files. Atomic multi-file locking prevents race conditions. Locks auto-expire after 5 minutes so stale claims never block the team.
+Agents claim `READING` or `WRITING` locks before touching files. Atomic multi-file locking prevents race conditions. Locks auto-expire after 5 minutes so stale claims never block the team. This is inspired by the process of multithreading, where resources are locked to ensure only one thread accesses a shared resource at a time. In our version, we focus on files edited by many agents, and we use a graph-based approach to detect conflicts. Relay builds live dependency graphs from your repository's imports (JS/TS/Python). It detects both **direct conflicts** (two agents targeting the same file) and **neighbor conflicts** (an agent editing a file that another agent's target depends on). This catches the subtle breakages that file-level locking alone would miss.
 
-**Dependency-Aware Conflict Detection**
-Relay builds live dependency graphs from your repository's imports (JS/TS/Python). It detects both **direct conflicts** (two agents targeting the same file) and **neighbor conflicts** (an agent editing a file that another agent's target depends on). This catches the subtle breakages that file-level locking alone would miss.
+The three types of state a node representing a file can be in are:
+1. **Open (Default)**
+- A file that is available for editing
+- No one is currently working on this file
+
+2. **Locked**
+- A file that someone (or a system) has explicitly locked for editing
+- Shown with a thicker border and different coloring
+- Indicates "I am actively working on this file, hands off!"
+
+3. **Neighbor Locked**
+- A file that is adjacent to (depends on or is depended upon by) a locked file
+- This is used to warn: "Be careful editing this file, someone is working on a related file"
+- Helps prevent merge conflicts and coordination issues
+
 
 **Orchestration Commands**
 When an agent checks in, Relay returns a clear directive:
@@ -77,6 +93,21 @@ Relay is the missing layer:
 - **Zero friction** — native MCP means agents coordinate without developer intervention
 
 This isn't just a merge conflict reducer. It's the communication protocol that multi-agent teams need to function.
+
+95% of general AI tools fail when treated as add-ons rather than embedded in core workflows according to Salesforce. In order to make sure that businesses and enterprises can successfully adopt AI, we need to make sure that AI tools are embedded in core workflows and can allow for genuine collaboration workers and collaboration between AI and humans. 
+
+---
+
+## Tech Stack
+
+| Category | Technology |
+|----------|------------|
+| **Framework** | Next.js 14 + React 18 + TypeScript |
+| **Storage** | Vercel KV (Upstash Redis) for atomic locks |
+| **APIs** | GitHub API via Octokit, NextAuth for OAuth |
+| **MCP Protocol** | Native HTTP + SSE (JSON-RPC 2.0) |
+| **Visualization** | ReactFlow, Dagre, Framer Motion |
+| **Testing** | Vitest |
 
 ---
 
