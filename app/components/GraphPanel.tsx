@@ -504,13 +504,13 @@ export default function GraphPanel({
                     <Panel position="top-left" className="z-[1000]">
                         <form
                             onSubmit={onSearchSubmit}
-                            className={`flex items-center gap-1 rounded-full border px-2 py-1.5 shadow-lg backdrop-blur ${isDark ? 'border-zinc-700 bg-zinc-950/90' : 'border-zinc-200 bg-white/90'}`}
+                            className={`flex items-center gap-1 rounded-full border px-2 py-1.5 shadow-lg backdrop-blur ${isDark ? 'border-zinc-700/75 bg-zinc-950/60' : 'border-zinc-200/80 bg-white/60'}`}
                         >
                             <Search className={`h-3.5 w-3.5 shrink-0 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`} />
                             <input
                                 value={nodeSearchTerm}
                                 onChange={(event) => setNodeSearchTerm(event.target.value)}
-                                placeholder="Find file..."
+                                placeholder="Search..."
                                 className={`w-40 border-none bg-transparent text-xs outline-none md:w-56 ${isDark ? 'text-zinc-100 placeholder:text-zinc-500' : 'text-zinc-700 placeholder:text-zinc-400'}`}
                             />
                             {nodeSearchTerm.trim().length > 0 && (
@@ -524,15 +524,9 @@ export default function GraphPanel({
                                     <X className="h-3 w-3" />
                                 </button>
                             )}
-                            <button
-                                type="submit"
-                                className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors ${isDark ? 'border-emerald-500/60 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20' : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}
-                            >
-                                Go
-                            </button>
                         </form>
                         {searchFeedback && (
-                            <div className={`mt-2 inline-flex max-w-[320px] rounded-lg border px-2 py-1 text-[11px] shadow-sm ${isDark ? 'border-zinc-700 bg-zinc-950/90 text-zinc-300' : 'border-zinc-200 bg-white/90 text-zinc-600'}`}>
+                            <div className={`mt-2 inline-flex max-w-[320px] rounded-lg border px-2 py-1 text-[11px] shadow-sm ${isDark ? 'border-zinc-700/75 bg-zinc-950/60 text-zinc-300' : 'border-zinc-200/80 bg-white/60 text-zinc-600'}`}>
                                 {searchFeedback}
                             </div>
                         )}
