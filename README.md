@@ -1,6 +1,6 @@
 # Relay (DevFest 2026)
 
-Relay is a Next.js + Vercel KV coordination backend with a dependency-graph UI and an MCP server for agent workflows.
+Relay is a Next.js + Vercel KV coordination backend with a dependency-graph UI and MCP protocol support for agent workflows.
 
 ## What’s implemented
 
@@ -12,7 +12,8 @@ Relay is a Next.js + Vercel KV coordination backend with a dependency-graph UI a
 - Lock cleanup cron endpoint (`GET /api/cleanup_stale_locks`)
 - Frontend graph viewer with force-style node motion
 - GitHub OAuth for UI repo selection (`next-auth`)
-- MCP server in `/mcp` with `check_status` and `post_status` tools
+- Native MCP endpoint at `/mcp` with `check_status` and `post_status` tools
+- Optional standalone Python MCP server in `mcp/` (proxy mode)
 
 ## Tech stack
 
@@ -20,13 +21,13 @@ Relay is a Next.js + Vercel KV coordination backend with a dependency-graph UI a
 - Vercel KV (Upstash Redis)
 - GitHub API via Octokit
 - NextAuth (GitHub provider)
-- Dedalus Labs MCP Server Hookup
+- MCP protocol (Streamable HTTP style)
 
 ## Project layout
 
 - `app/` Next.js app + API routes
 - `lib/` graph/lock/github services
-- `mcp/` Python MCP server
+- `mcp/` optional Python MCP server
 - `tests/` Vitest tests for app routes/libs
 
 ## Local setup
@@ -79,6 +80,50 @@ curl "http://localhost:3000/api/graph"
 curl -i http://localhost:3000/api/cleanup_stale_locks
 ```
 
+## Native MCP endpoint (recommended)
+
+This app now exposes MCP protocol directly at:
+
+- Local: `http://localhost:3000/mcp`
+- Deployed: `https://your-app.vercel.app/mcp`
+
+Your MCP client should connect to that URL directly.
+
+### Quick MCP check
+
+```bash
+curl -s http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+### Tool call check
+
+```bash
+HEAD=$(git rev-parse HEAD)
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+curl -s http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":2,
+    "method":"tools/call",
+    "params":{
+      "name":"check_status",
+      "arguments":{
+        "username":"luka",
+        "file_paths":["README.md"],
+        "agent_head":"'"$HEAD"'",
+        "repo_url":"https://github.com/<owner>/<repo>",
+        "branch":"'"$BRANCH"'"
+      }
+    }
+  }'
+```
+
 ## Connect and deploy to Vercel
 
 ### 1. Connect local repo to your Vercel project
@@ -125,7 +170,9 @@ vercel --prod
 
 The cron in `vercel.json` is configured to call `/api/cleanup_stale_locks` daily at `03:00` UTC.
 
-## MCP server (Python)
+## Standalone Python MCP server (optional)
+
+Use this only if you explicitly want a separate MCP process.
 
 ### Run locally
 
