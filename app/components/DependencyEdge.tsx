@@ -1,5 +1,5 @@
 import React, { memo, useCallback } from 'react';
-import { BaseEdge, EdgeProps, getSmoothStepPath, useStore } from 'reactflow';
+import { BaseEdge, EdgeProps, getBezierPath, useStore } from 'reactflow';
 import { getEdgeParams } from '../utils/graphUtils';
 
 const DependencyEdge = ({
@@ -24,7 +24,7 @@ const DependencyEdge = ({
 
     const { sx, sy, tx, ty, sourcePos, targetPos } = getEdgeParams(sourceNode, targetNode);
 
-    const [edgePath] = getSmoothStepPath({
+    const [edgePath] = getBezierPath({
         sourceX: sx,
         sourceY: sy,
         sourcePosition: sourcePos,

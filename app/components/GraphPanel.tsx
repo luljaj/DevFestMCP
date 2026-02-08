@@ -17,6 +17,7 @@ import FileNode from './FileNode';
 import DependencyEdge from './DependencyEdge';
 import ControlDock from './ControlDock';
 import NodeDetailsDialog from './NodeDetailsDialog';
+import { computeDagreLayout } from '../utils/dagreLayout';
 
 const nodeTypes = {
     activeFile: FileNode,
@@ -184,163 +185,10 @@ export default function GraphPanel({
 
         const nodeIds = graph.nodes.map((node) => node.id);
         const edges = graph.edges.map((edge) => ({ source: edge.source, target: edge.target }));
-        const folderByNodeId = Object.fromEntries(
-            graph.nodes.map((node) => [node.id, getFolderPath(node.id)]),
-        );
 
-        // Calculate hierarchical levels
-        const nodeLevels = calculateNodeLevels(nodeIds, edges);
-        const seededPositions = buildFolderClusterPositions(nodeIds);
-
-        const interval = setInterval(() => {
-            setNodePositions((previous) => {
-                if (Object.keys(previous).length === 0) {
-                    return previous;
-                }
-
-                const nextPositions: Record<string, Point> = {};
-                const forces: Record<string, Point> = {};
-                const nextVelocities: Record<string, Point> = { ...velocitiesRef.current };
-
-                for (const nodeId of nodeIds) {
-                    const fallback = seededPositions[nodeId] ?? { x: 0, y: 0 };
-                    nextPositions[nodeId] = previous[nodeId] ?? fallback;
-                    forces[nodeId] = { x: 0, y: 0 };
-
-                    // Brownian motion / Floating effect
-                    forces[nodeId].x += (Math.random() - 0.5) * LAYOUT_BROWNIAN_MOTION;
-                    forces[nodeId].y += (Math.random() - 0.5) * LAYOUT_BROWNIAN_MOTION;
-                }
-
-                for (let i = 0; i < nodeIds.length; i += 1) {
-                    const sourceId = nodeIds[i];
-                    for (let j = i + 1; j < nodeIds.length; j += 1) {
-                        const targetId = nodeIds[j];
-                        const source = nextPositions[sourceId];
-                        const target = nextPositions[targetId];
-                        const deltaX = target.x - source.x;
-                        const deltaY = target.y - source.y;
-                        const distance = Math.max(
-                            Math.hypot(deltaX, deltaY),
-                            LAYOUT_REPULSION_MIN_DISTANCE,
-                        );
-                        const directionX = deltaX / distance;
-                        const directionY = deltaY / distance;
-                        const magnitude = LAYOUT_REPULSION / (distance * distance);
-
-                        forces[sourceId].x -= directionX * magnitude;
-                        forces[sourceId].y -= directionY * magnitude;
-                        forces[targetId].x += directionX * magnitude;
-                        forces[targetId].y += directionY * magnitude;
-
-                        if (folderByNodeId[sourceId] === folderByNodeId[targetId]) {
-                            const separation = distance - LAYOUT_SAME_FOLDER_TARGET;
-                            // Pull them together if they drift too far, or push if too close
-                            if (Math.abs(separation) > 5) {
-                                const folderPull = separation * LAYOUT_SAME_FOLDER_PULL;
-                                forces[sourceId].x += directionX * folderPull;
-                                forces[sourceId].y += directionY * folderPull;
-                                forces[targetId].x -= directionX * folderPull;
-                                forces[targetId].y -= directionY * folderPull;
-                            }
-                        }
-
-                        const absDeltaX = Math.abs(deltaX);
-                        if (absDeltaX < LAYOUT_MIN_X_GAP) {
-                            const pushX = Math.min(
-                                (LAYOUT_MIN_X_GAP - absDeltaX) * LAYOUT_AXIS_GAP_PUSH,
-                                LAYOUT_AXIS_GAP_PUSH_MAX,
-                            );
-                            const separationDirectionX = absDeltaX < 0.001
-                                ? getAxisSeparationDirection(sourceId, targetId, 'x')
-                                : deltaX / absDeltaX;
-                            forces[sourceId].x -= separationDirectionX * pushX;
-                            forces[targetId].x += separationDirectionX * pushX;
-                        }
-
-                        const absDeltaY = Math.abs(deltaY);
-                        if (absDeltaY < LAYOUT_MIN_Y_GAP) {
-                            const pushY = Math.min(
-                                (LAYOUT_MIN_Y_GAP - absDeltaY) * LAYOUT_AXIS_GAP_PUSH,
-                                LAYOUT_AXIS_GAP_PUSH_MAX,
-                            );
-                            const separationDirectionY = absDeltaY < 0.001
-                                ? getAxisSeparationDirection(sourceId, targetId, 'y')
-                                : deltaY / absDeltaY;
-                            forces[sourceId].y -= separationDirectionY * pushY;
-                            forces[targetId].y += separationDirectionY * pushY;
-                        }
-                    }
-                }
-
-                for (const edge of edges) {
-                    const source = nextPositions[edge.source];
-                    const target = nextPositions[edge.target];
-                    if (!source || !target) {
-                        continue;
-                    }
-
-                    const deltaX = target.x - source.x;
-                    const deltaY = target.y - source.y;
-                    const distance = Math.max(Math.hypot(deltaX, deltaY), 1);
-                    const directionX = deltaX / distance;
-                    const directionY = deltaY / distance;
-                    const spring = (distance - LAYOUT_EDGE_LENGTH) * LAYOUT_EDGE_SPRING;
-
-                    forces[edge.source].x += directionX * spring;
-                    forces[edge.source].y += directionY * spring;
-                    forces[edge.target].x -= directionX * spring;
-                    forces[edge.target].y -= directionY * spring;
-                }
-
-                let centroidX = 0;
-                let centroidY = 0;
-                for (const nodeId of nodeIds) {
-                    centroidX += nextPositions[nodeId].x;
-                    centroidY += nextPositions[nodeId].y;
-                }
-                centroidX /= nodeIds.length;
-                centroidY /= nodeIds.length;
-
-                for (const nodeId of nodeIds) {
-                    const position = nextPositions[nodeId];
-                    forces[nodeId].x += (centroidX - position.x) * LAYOUT_CENTER_GRAVITY;
-                    forces[nodeId].y += (centroidY - position.y) * LAYOUT_CENTER_GRAVITY;
-
-                    // Apply hierarchical force
-                    const level = nodeLevels[nodeId] || 0;
-                    const targetY = level * LAYOUT_HIERARCHY_LEVEL_HEIGHT;
-                    // Pull towards the target Y level, relative to centroidY to center the whole structure vertically
-                    const absoluteTargetY = centroidY - (Math.max(...Object.values(nodeLevels)) * LAYOUT_HIERARCHY_LEVEL_HEIGHT / 2) + targetY;
-
-                    forces[nodeId].y += (absoluteTargetY - position.y) * LAYOUT_HIERARCHY_STRENGTH;
-                }
-
-                for (const nodeId of nodeIds) {
-                    const velocity = nextVelocities[nodeId] ?? { x: 0, y: 0 };
-                    velocity.x = (velocity.x + forces[nodeId].x) * LAYOUT_DAMPING;
-                    velocity.y = (velocity.y + forces[nodeId].y) * LAYOUT_DAMPING;
-
-                    const speed = Math.hypot(velocity.x, velocity.y);
-                    if (speed > LAYOUT_MAX_SPEED) {
-                        const scale = LAYOUT_MAX_SPEED / speed;
-                        velocity.x *= scale;
-                        velocity.y *= scale;
-                    }
-
-                    nextVelocities[nodeId] = velocity;
-                    nextPositions[nodeId] = {
-                        x: nextPositions[nodeId].x + velocity.x,
-                        y: nextPositions[nodeId].y + velocity.y,
-                    };
-                }
-
-                velocitiesRef.current = nextVelocities;
-                return nextPositions;
-            });
-        }, LAYOUT_TICK_MS);
-
-        return () => clearInterval(interval);
+        // Compute layout using Dagre (deterministic, hierarchical)
+        const positions = computeDagreLayout(nodeIds, edges);
+        setNodePositions(positions);
     }, [graph, structureSignature]);
 
     useEffect(() => {
