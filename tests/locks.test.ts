@@ -33,23 +33,21 @@ describe('locks', () => {
   });
 
   test('acquires lock on available file', async () => {
-    mockedKv.eval.mockResolvedValue(
-      JSON.stringify({
-        success: true,
-        locks: [
-          {
-            file_path: 'src/test.ts',
-            user_id: 'user1',
-            user_name: 'User 1',
-            status: 'WRITING',
-            agent_head: 'abc123',
-            message: 'Editing file',
-            timestamp: Date.now(),
-            expiry: Date.now() + 300_000,
-          },
-        ],
-      }),
-    );
+    mockedKv.eval.mockResolvedValue({
+      success: true,
+      locks: [
+        {
+          file_path: 'src/test.ts',
+          user_id: 'user1',
+          user_name: 'User 1',
+          status: 'WRITING',
+          agent_head: 'abc123',
+          message: 'Editing file',
+          timestamp: Date.now(),
+          expiry: Date.now() + 300_000,
+        },
+      ],
+    });
 
     const result = await acquireLocks({
       repoUrl: 'https://github.com/test/repo',
@@ -66,15 +64,31 @@ describe('locks', () => {
     expect(result.locks?.[0]?.file_path).toBe('src/test.ts');
   });
 
+  test('returns INVALID_LOCK_RESPONSE when kv eval response is malformed', async () => {
+    mockedKv.eval.mockResolvedValue(12345);
+
+    const result = await acquireLocks({
+      repoUrl: 'https://github.com/test/repo',
+      branch: 'main',
+      filePaths: ['src/test.ts'],
+      userId: 'user1',
+      userName: 'User 1',
+      status: 'WRITING',
+      message: 'Editing file',
+      agentHead: 'abc123',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toBe('INVALID_LOCK_RESPONSE');
+  });
+
   test('rejects lock when file conflict is returned', async () => {
-    mockedKv.eval.mockResolvedValue(
-      JSON.stringify({
-        success: false,
-        reason: 'FILE_CONFLICT',
-        conflicting_file: 'src/test.ts',
-        conflicting_user: 'user1',
-      }),
-    );
+    mockedKv.eval.mockResolvedValue({
+      success: false,
+      reason: 'FILE_CONFLICT',
+      conflicting_file: 'src/test.ts',
+      conflicting_user: 'user1',
+    });
 
     const result = await acquireLocks({
       repoUrl: 'https://github.com/test/repo',
@@ -105,7 +119,7 @@ describe('locks', () => {
   test('filters expired locks when reading lock map', async () => {
     const now = Date.now();
     mockedKv.hgetall.mockResolvedValue({
-      'src/live.ts': JSON.stringify({
+      'src/live.ts': {
         file_path: 'src/live.ts',
         user_id: 'user1',
         user_name: 'User 1',
@@ -114,8 +128,8 @@ describe('locks', () => {
         message: 'Live lock',
         timestamp: now,
         expiry: now + 5000,
-      }),
-      'src/old.ts': JSON.stringify({
+      },
+      'src/old.ts': {
         file_path: 'src/old.ts',
         user_id: 'user2',
         user_name: 'User 2',
@@ -124,7 +138,7 @@ describe('locks', () => {
         message: 'Old lock',
         timestamp: now - 5000,
         expiry: now - 1,
-      }),
+      },
     });
 
     const allLocks = await getLocks('https://github.com/test/repo', 'main');

@@ -290,6 +290,35 @@ describe('route smoke checks', () => {
     expect(payload.orchestration.type).toBe('orchestration_command');
   });
 
+  test('post_status surfaces non-conflict lock acquisition failures without undefined placeholders', async () => {
+    mockedGetRepoHead.mockResolvedValueOnce('same-head');
+    mockedAcquireLocks.mockResolvedValueOnce({
+      success: false,
+      reason: 'INTERNAL_ERROR',
+    });
+
+    const request = {
+      json: async () => ({
+        repo_url: 'https://github.com/a/b',
+        branch: 'main',
+        file_paths: ['src/a.ts'],
+        status: 'WRITING',
+        message: 'work',
+        agent_head: 'same-head',
+      }),
+      headers: new Headers(),
+    } as any;
+
+    const response = await postStatusPost(request);
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.success).toBe(false);
+    expect(payload.orchestration.action).toBe('SWITCH_TASK');
+    expect(payload.orchestration.reason).toBe('INTERNAL_ERROR');
+    expect(payload.orchestration.reason).not.toContain('undefined');
+  });
+
   test('post_status returns orphaned_dependencies on OPEN', async () => {
     mockedGetRepoHead.mockResolvedValueOnce('remote-head');
     getCachedGraphMock.mockResolvedValueOnce({
@@ -333,6 +362,30 @@ describe('route smoke checks', () => {
       ['src/auth.ts'],
       'agent-user',
     );
+  });
+
+  test('post_status returns STOP when OPEN lock release fails', async () => {
+    mockedGetRepoHead.mockResolvedValueOnce('remote-head');
+    mockedReleaseLocks.mockResolvedValueOnce({ success: false });
+
+    const request = {
+      json: async () => ({
+        repo_url: 'https://github.com/a/b',
+        branch: 'main',
+        file_paths: ['src/auth.ts'],
+        status: 'OPEN',
+        message: 'done',
+      }),
+      headers: new Headers([['x-github-user', 'agent-user']]),
+    } as any;
+
+    const response = await postStatusPost(request);
+    const payload = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(payload.success).toBe(false);
+    expect(payload.orchestration.action).toBe('STOP');
+    expect(payload.orchestration.reason).toBe('Failed to release locks');
   });
 
   test('post_status uses x-github-username as fallback for user identity', async () => {

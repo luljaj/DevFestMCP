@@ -74,7 +74,21 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      await releaseLocks(repoUrl, branch, filePaths, userId);
+      const releaseResult = await releaseLocks(repoUrl, branch, filePaths, userId);
+      if (!releaseResult.success) {
+        return NextResponse.json(
+          {
+            success: false,
+            orchestration: {
+              type: 'orchestration_command',
+              action: 'STOP',
+              command: null,
+              reason: 'Failed to release locks',
+            },
+          },
+          { status: 500 },
+        );
+      }
 
       let orphanedDependencies: string[] = [];
       try {
@@ -142,13 +156,20 @@ export async function POST(request: NextRequest) {
       });
 
       if (!lockResult.success) {
+        const reason =
+          lockResult.reason === 'FILE_CONFLICT' &&
+          isNonEmptyString(lockResult.conflictingFile) &&
+          isNonEmptyString(lockResult.conflictingUser)
+            ? `${lockResult.reason}: ${lockResult.conflictingFile} locked by ${lockResult.conflictingUser}`
+            : lockResult.reason || 'Failed to acquire lock';
+
         return NextResponse.json({
           success: false,
           orchestration: {
             type: 'orchestration_command',
             action: 'SWITCH_TASK',
             command: null,
-            reason: `${lockResult.reason}: ${lockResult.conflictingFile} locked by ${lockResult.conflictingUser}`,
+            reason,
           },
         });
       }

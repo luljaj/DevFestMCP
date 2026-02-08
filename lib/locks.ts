@@ -36,9 +36,31 @@ function getLockKey(repoUrl: string, branch: string): string {
   return `locks:${repoUrl}:${branch}`;
 }
 
-function parseLockEntry(value: string): LockEntry | null {
+type RedisLockEntryValue = string | Partial<LockEntry> | null | undefined;
+
+function normalizeJsonValue<T>(value: string | T | null | undefined): T | null {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  if (value && typeof value === 'object') {
+    return value;
+  }
+
+  return null;
+}
+
+function parseLockEntry(value: RedisLockEntryValue): LockEntry | null {
   try {
-    const parsed = JSON.parse(value) as Partial<LockEntry>;
+    const parsed = normalizeJsonValue<Partial<LockEntry>>(value);
+    if (!parsed) {
+      return null;
+    }
+
     if (
       typeof parsed.file_path === 'string' &&
       typeof parsed.user_id === 'string' &&
@@ -108,7 +130,7 @@ export async function acquireLocks(request: LockRequest): Promise<AcquireResult>
   `;
 
   try {
-    const result = (await (kv as any).eval(luaScript, [lockKey], [
+    const rawResult = await (kv as any).eval(luaScript, [lockKey], [
       JSON.stringify(request.filePaths),
       request.userId,
       request.status,
@@ -117,15 +139,22 @@ export async function acquireLocks(request: LockRequest): Promise<AcquireResult>
       request.userName,
       request.agentHead,
       request.message,
-    ])) as string;
+    ]);
 
-    const parsed = JSON.parse(result) as {
+    const parsed = normalizeJsonValue<{
       success: boolean;
       locks?: LockEntry[];
       reason?: string;
       conflicting_file?: string;
       conflicting_user?: string;
-    };
+    }>(rawResult);
+
+    if (!parsed) {
+      return {
+        success: false,
+        reason: 'INVALID_LOCK_RESPONSE',
+      };
+    }
 
     return {
       success: parsed.success,
@@ -180,7 +209,7 @@ export async function releaseLocks(
 
 export async function getLocks(repoUrl: string, branch: string): Promise<Record<string, LockEntry>> {
   const lockKey = getLockKey(repoUrl, branch);
-  const entries = (await kv.hgetall(lockKey)) as Record<string, string> | null;
+  const entries = (await kv.hgetall(lockKey)) as Record<string, RedisLockEntryValue> | null;
 
   if (!entries) {
     return {};
@@ -222,7 +251,7 @@ export async function cleanupExpiredLocks(): Promise<number> {
   const keys = (await (kv as any).keys('locks:*')) as string[];
 
   for (const key of keys) {
-    const entries = (await kv.hgetall(key)) as Record<string, string> | null;
+    const entries = (await kv.hgetall(key)) as Record<string, RedisLockEntryValue> | null;
     if (!entries) {
       continue;
     }
