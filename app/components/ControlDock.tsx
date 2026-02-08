@@ -167,10 +167,11 @@ export default function ControlDock({
                 </div>
 
                 <div className={`hidden items-center gap-1 border rounded-lg px-2 py-1 text-[11px] md:flex ${isDark ? 'border-zinc-700 bg-zinc-950 text-zinc-300' : 'border-zinc-200 bg-zinc-50 text-zinc-600'}`}>
-                    <span
-                        className={`h-2 w-2 rounded-full ${refreshing ? 'animate-pulse' : ''}`}
-                        style={{ backgroundColor: isDark ? '#a1a1aa' : '#71717a' }}
-                    />
+                    <span className="relative inline-flex h-2.5 w-2.5 shrink-0">
+                        <span className={`absolute inset-0 rounded-full ${refreshing ? 'animate-ping' : 'animate-pulse'} ${isDark ? 'bg-emerald-300/45' : 'bg-emerald-500/35'}`} />
+                        <span className={`absolute inset-0 rounded-full blur-[1px] ${isDark ? 'bg-emerald-300/60' : 'bg-emerald-500/45'}`} />
+                        <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${isDark ? 'bg-emerald-300' : 'bg-emerald-500'}`} />
+                    </span>
                     {statusLabel}
                 </div>
 
@@ -232,7 +233,7 @@ export default function ControlDock({
 
                     <button
                         onClick={onRefresh}
-                        className={`h-8 w-8 border rounded-lg transition-colors ${isDark ? 'border-zinc-700 text-zinc-300 hover:bg-zinc-900' : 'border-zinc-200 text-zinc-600 hover:bg-zinc-100'} ${refreshing ? 'animate-spin' : ''}`}
+                        className={`h-8 w-8 border rounded-lg transition-colors ${isDark ? 'border-emerald-500/60 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20' : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'} ${refreshing ? 'animate-spin' : ''}`}
                         title="Refresh graph"
                         aria-label="Refresh graph"
                     >

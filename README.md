@@ -20,7 +20,7 @@ Relay is a Next.js + Vercel KV coordination backend with a dependency-graph UI a
 - Vercel KV (Upstash Redis)
 - GitHub API via Octokit
 - NextAuth (GitHub provider)
-- MCP server (`dedalus-mcp`, Python)
+- Dedalus Labs MCP Server Hookup
 
 ## Project layout
 

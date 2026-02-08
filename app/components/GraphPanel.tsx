@@ -52,10 +52,20 @@ const LAYOUT_EDGE_SPRING = 0.008;
 const LAYOUT_REPULSION = 30_000;
 const LAYOUT_REPULSION_MIN_DISTANCE = 38;
 const LAYOUT_CENTER_GRAVITY = 0.0014;
-const LAYOUT_SAME_FOLDER_TARGET = 180;
-const LAYOUT_SAME_FOLDER_PULL = 0.0024;
+const LAYOUT_SAME_FOLDER_TARGET = 220;
+const LAYOUT_SAME_FOLDER_RANGE = 120;
+const LAYOUT_SAME_FOLDER_PULL = 0.00035;
+const LAYOUT_MIN_X_GAP = 236;
+const LAYOUT_MIN_Y_GAP = 92;
+const LAYOUT_AXIS_GAP_PUSH = 0.05;
+const LAYOUT_AXIS_GAP_PUSH_MAX = 2.8;
+const LAYOUT_FOLDER_GROUP_X_STEP = 520;
+const LAYOUT_FOLDER_GROUP_Y_STEP = 340;
+const LAYOUT_FOLDER_ITEM_X_STEP = 260;
+const LAYOUT_FOLDER_ITEM_Y_STEP = 130;
 const LAYOUT_DAMPING = 0.84;
 const LAYOUT_MAX_SPEED = 12;
+const VIEW_TRANSITION_OVERLAY_MS = 1000;
 
 type Point = { x: number; y: number };
 
@@ -77,8 +87,11 @@ export default function GraphPanel({
     const [updatedNodeExpiry, setUpdatedNodeExpiry] = useState<Record<string, number>>({});
     const [newEdgeExpiry, setNewEdgeExpiry] = useState<Record<string, number>>({});
     const [nodePositions, setNodePositions] = useState<Record<string, Point>>({});
+    const [showViewTransitionOverlay, setShowViewTransitionOverlay] = useState(false);
     const previousLocksRef = useRef<Record<string, LockEntry>>({});
     const previousEdgesRef = useRef<Set<string>>(new Set());
+    const previousStructureSignatureRef = useRef('');
+    const viewTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const velocitiesRef = useRef<Record<string, Point>>({});
     const structureSignature = useMemo(() => {
         if (!graph) {
@@ -101,6 +114,36 @@ export default function GraphPanel({
     }, []);
 
     useEffect(() => {
+        if (!structureSignature) {
+            previousStructureSignatureRef.current = '';
+            return;
+        }
+
+        const previousSignature = previousStructureSignatureRef.current;
+        previousStructureSignatureRef.current = structureSignature;
+        if (!previousSignature || previousSignature === structureSignature) {
+            return;
+        }
+
+        setShowViewTransitionOverlay(true);
+        if (viewTransitionTimerRef.current) {
+            clearTimeout(viewTransitionTimerRef.current);
+        }
+        viewTransitionTimerRef.current = setTimeout(() => {
+            setShowViewTransitionOverlay(false);
+            viewTransitionTimerRef.current = null;
+        }, VIEW_TRANSITION_OVERLAY_MS);
+    }, [structureSignature]);
+
+    useEffect(() => {
+        return () => {
+            if (viewTransitionTimerRef.current) {
+                clearTimeout(viewTransitionTimerRef.current);
+            }
+        };
+    }, []);
+
+    useEffect(() => {
         if (!graph) {
             setNodePositions({});
             velocitiesRef.current = {};
@@ -108,22 +151,17 @@ export default function GraphPanel({
         }
 
         setNodePositions((previous) => {
-            const columns = Math.max(2, Math.ceil(Math.sqrt(graph.nodes.length)));
             const next: Record<string, Point> = {};
+            const seededPositions = buildFolderClusterPositions(graph.nodes.map((node) => node.id));
 
-            for (const [index, node] of graph.nodes.entries()) {
+            for (const node of graph.nodes) {
                 const existing = previous[node.id];
                 if (existing) {
                     next[node.id] = existing;
                     continue;
                 }
 
-                const gridPosition = getGridPosition(index, columns);
-                const jitter = getInitialJitter(node.id);
-                next[node.id] = {
-                    x: gridPosition.x + jitter.x,
-                    y: gridPosition.y + jitter.y,
-                };
+                next[node.id] = seededPositions[node.id] ?? { x: 0, y: 0 };
             }
 
             return next;
@@ -146,6 +184,7 @@ export default function GraphPanel({
         const folderByNodeId = Object.fromEntries(
             graph.nodes.map((node) => [node.id, getFolderPath(node.id)]),
         );
+        const seededPositions = buildFolderClusterPositions(nodeIds);
 
         const interval = setInterval(() => {
             setNodePositions((previous) => {
@@ -157,8 +196,8 @@ export default function GraphPanel({
                 const forces: Record<string, Point> = {};
                 const nextVelocities: Record<string, Point> = { ...velocitiesRef.current };
 
-                for (const [index, nodeId] of nodeIds.entries()) {
-                    const fallback = getGridPosition(index, Math.max(2, Math.ceil(Math.sqrt(nodeIds.length))));
+                for (const nodeId of nodeIds) {
+                    const fallback = seededPositions[nodeId] ?? { x: 0, y: 0 };
                     nextPositions[nodeId] = previous[nodeId] ?? fallback;
                     forces[nodeId] = { x: 0, y: 0 };
                 }
@@ -186,13 +225,40 @@ export default function GraphPanel({
 
                         if (folderByNodeId[sourceId] === folderByNodeId[targetId]) {
                             const separation = distance - LAYOUT_SAME_FOLDER_TARGET;
-                            if (separation > 0) {
-                                const folderPull = separation * LAYOUT_SAME_FOLDER_PULL;
+                            if (separation > 0 && separation < LAYOUT_SAME_FOLDER_RANGE) {
+                                const proximityFalloff = 1 - (separation / LAYOUT_SAME_FOLDER_RANGE);
+                                const folderPull = separation * proximityFalloff * LAYOUT_SAME_FOLDER_PULL;
                                 forces[sourceId].x += directionX * folderPull;
                                 forces[sourceId].y += directionY * folderPull;
                                 forces[targetId].x -= directionX * folderPull;
                                 forces[targetId].y -= directionY * folderPull;
                             }
+                        }
+
+                        const absDeltaX = Math.abs(deltaX);
+                        if (absDeltaX < LAYOUT_MIN_X_GAP) {
+                            const pushX = Math.min(
+                                (LAYOUT_MIN_X_GAP - absDeltaX) * LAYOUT_AXIS_GAP_PUSH,
+                                LAYOUT_AXIS_GAP_PUSH_MAX,
+                            );
+                            const separationDirectionX = absDeltaX < 0.001
+                                ? getAxisSeparationDirection(sourceId, targetId, 'x')
+                                : deltaX / absDeltaX;
+                            forces[sourceId].x -= separationDirectionX * pushX;
+                            forces[targetId].x += separationDirectionX * pushX;
+                        }
+
+                        const absDeltaY = Math.abs(deltaY);
+                        if (absDeltaY < LAYOUT_MIN_Y_GAP) {
+                            const pushY = Math.min(
+                                (LAYOUT_MIN_Y_GAP - absDeltaY) * LAYOUT_AXIS_GAP_PUSH,
+                                LAYOUT_AXIS_GAP_PUSH_MAX,
+                            );
+                            const separationDirectionY = absDeltaY < 0.001
+                                ? getAxisSeparationDirection(sourceId, targetId, 'y')
+                                : deltaY / absDeltaY;
+                            forces[sourceId].y -= separationDirectionY * pushY;
+                            forces[targetId].y += separationDirectionY * pushY;
                         }
                     }
                 }
@@ -409,6 +475,7 @@ export default function GraphPanel({
     }, [graph, selectedNodeId]);
 
     const activeLocksCount = graph ? Object.keys(graph.locks).length : 0;
+    const showGraphMask = loading || showViewTransitionOverlay;
 
     return (
         <div className={`w-full h-full relative overflow-hidden border rounded-2xl ${isDark ? 'border-zinc-800 bg-zinc-900' : 'border-zinc-200 bg-zinc-100'}`}>
@@ -427,63 +494,74 @@ export default function GraphPanel({
                 onToggleTheme={onToggleTheme}
             />
 
-            <ReactFlow
-                nodes={nodes}
-                edges={edges}
-                nodeTypes={nodeTypes}
-                edgeTypes={edgeTypes}
-                onNodeClick={onNodeClick}
-                nodesConnectable={false}
-                nodesDraggable
-                fitView
-                minZoom={0.1}
-                maxZoom={2}
-                proOptions={{ hideAttribution: true }}
-                className={isDark ? '!bg-zinc-900' : '!bg-zinc-100'}
-            >
-                <Background color={isDark ? '#3f3f46' : '#a1a1aa'} variant={BackgroundVariant.Dots} gap={24} size={1.2} />
-                <Controls
-                    position="bottom-right"
-                    className={isDark
-                        ? '!bg-zinc-900/85 !text-zinc-200 !shadow-lg !border !border-zinc-700 !rounded-xl'
-                        : '!bg-white/65 !shadow-lg !border !border-zinc-200 !rounded-xl'}
-                />
-                <MiniMap
-                    pannable
-                    zoomable
-                    className={isDark
-                        ? '!bg-zinc-900/85 !shadow-lg !rounded-xl !border !border-zinc-700'
-                        : '!bg-white/60 !shadow-lg !rounded-xl !border !border-zinc-200'}
-                    nodeColor={(node) => {
-                        const lockStatus = node.data.lockStatus;
-                        if (!lockStatus) return isDark ? '#3f3f46' : '#d4d4d8';
-                        return isDark ? '#f4f4f5' : '#18181b';
-                    }}
-                />
-
-                <Panel
-                    position="bottom-left"
-                    className={`max-w-[280px] border px-4 py-3 shadow-xl rounded-xl ${isDark ? 'border-zinc-700 bg-black' : 'border-zinc-200 bg-white'}`}
+            <div className="relative h-full w-full">
+                <ReactFlow
+                    nodes={nodes}
+                    edges={edges}
+                    nodeTypes={nodeTypes}
+                    edgeTypes={edgeTypes}
+                    onNodeClick={onNodeClick}
+                    nodesConnectable={false}
+                    nodesDraggable
+                    fitView
+                    minZoom={0.1}
+                    maxZoom={2}
+                    proOptions={{ hideAttribution: true }}
+                    className={`${isDark ? '!bg-zinc-900' : '!bg-zinc-100'} transition-opacity duration-150 ${showGraphMask ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
                 >
-                    <h4 className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>Legend</h4>
-                    <div className="mt-2 space-y-2">
-                        {activeDevelopers.length === 0 && (
-                            <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>No active locks. Nodes are currently available.</p>
-                        )}
-                        {activeDevelopers.slice(0, 6).map((developer) => (
-                            <div key={developer.id} className="flex items-center justify-between gap-3 text-xs">
-                                <div className="flex items-center gap-2 min-w-0">
-                                    <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: developer.color }} />
-                                    <span className={`truncate font-semibold ${isDark ? 'text-zinc-200' : 'text-zinc-700'}`}>{developer.name}</span>
+                    <Background color={isDark ? '#3f3f46' : '#a1a1aa'} variant={BackgroundVariant.Dots} gap={24} size={1.2} />
+                    <Controls
+                        position="bottom-right"
+                        className={isDark
+                            ? '!bg-zinc-900/85 !text-zinc-200 !shadow-lg !border !border-zinc-700 !rounded-xl'
+                            : '!bg-white/65 !shadow-lg !border !border-zinc-200 !rounded-xl'}
+                    />
+                    <MiniMap
+                        pannable
+                        zoomable
+                        className={isDark
+                            ? '!bg-zinc-900/85 !shadow-lg !rounded-xl !border !border-zinc-700'
+                            : '!bg-white/60 !shadow-lg !rounded-xl !border !border-zinc-200'}
+                        nodeColor={(node) => {
+                            const lockStatus = node.data.lockStatus;
+                            if (!lockStatus) return isDark ? '#3f3f46' : '#d4d4d8';
+                            return isDark ? '#f4f4f5' : '#18181b';
+                        }}
+                    />
+
+                    <Panel
+                        position="bottom-left"
+                        className={`max-w-[280px] border px-4 py-3 shadow-xl rounded-xl ${isDark ? 'border-zinc-700 bg-black' : 'border-zinc-200 bg-white'}`}
+                    >
+                        <h4 className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>Legend</h4>
+                        <div className="mt-2 space-y-2">
+                            {activeDevelopers.length === 0 && (
+                                <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>No active locks. Nodes are currently available.</p>
+                            )}
+                            {activeDevelopers.slice(0, 6).map((developer) => (
+                                <div key={developer.id} className="flex items-center justify-between gap-3 text-xs">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                        <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: developer.color }} />
+                                        <span className={`truncate font-semibold ${isDark ? 'text-zinc-200' : 'text-zinc-700'}`}>{developer.name}</span>
+                                    </div>
+                                    <span className={`rounded-full border px-1.5 py-0.5 text-[10px] ${isDark ? 'border-zinc-700 bg-zinc-800 text-zinc-300' : 'border-zinc-200 bg-zinc-100 text-zinc-600'}`}>
+                                        {developer.lockCount} lock{developer.lockCount === 1 ? '' : 's'}
+                                    </span>
                                 </div>
-                                <span className={`rounded-full border px-1.5 py-0.5 text-[10px] ${isDark ? 'border-zinc-700 bg-zinc-800 text-zinc-300' : 'border-zinc-200 bg-zinc-100 text-zinc-600'}`}>
-                                    {developer.lockCount} lock{developer.lockCount === 1 ? '' : 's'}
-                                </span>
-                            </div>
-                        ))}
+                            ))}
+                        </div>
+                    </Panel>
+                </ReactFlow>
+
+                {showGraphMask && (
+                    <div className={`absolute inset-0 z-50 flex items-center justify-center ${isDark ? 'bg-zinc-900/95' : 'bg-zinc-100/95'} backdrop-blur-sm`}>
+                        <div className={`flex items-center gap-3 rounded-xl border px-4 py-2 text-xs font-semibold tracking-wide ${isDark ? 'border-zinc-700 bg-black/70 text-zinc-200' : 'border-zinc-200 bg-white/90 text-zinc-700'}`}>
+                            <span className={`h-2.5 w-2.5 rounded-full animate-pulse ${isDark ? 'bg-zinc-300' : 'bg-zinc-700'}`} />
+                            Loading view...
+                        </div>
                     </div>
-                </Panel>
-            </ReactFlow>
+                )}
+            </div>
 
             <NodeDetailsDialog
                 isOpen={!!selectedNodeId}
@@ -562,6 +640,55 @@ function getFolderPath(filePath: string): string {
         return '';
     }
     return filePath.slice(0, lastSlash);
+}
+
+function buildFolderClusterPositions(nodeIds: string[]): Record<string, Point> {
+    const byFolder = new Map<string, string[]>();
+    for (const nodeId of nodeIds) {
+        const folder = getFolderPath(nodeId);
+        const current = byFolder.get(folder);
+        if (current) {
+            current.push(nodeId);
+            continue;
+        }
+        byFolder.set(folder, [nodeId]);
+    }
+
+    const folders = Array.from(byFolder.keys()).sort((a, b) => a.localeCompare(b));
+    const folderColumns = Math.max(1, Math.ceil(Math.sqrt(folders.length)));
+    const positions: Record<string, Point> = {};
+
+    for (const [folderIndex, folder] of folders.entries()) {
+        const folderNodes = [...(byFolder.get(folder) ?? [])].sort((a, b) => a.localeCompare(b));
+        const folderRow = Math.floor(folderIndex / folderColumns);
+        const folderCol = folderIndex % folderColumns;
+        const centerX = folderCol * LAYOUT_FOLDER_GROUP_X_STEP;
+        const centerY = folderRow * LAYOUT_FOLDER_GROUP_Y_STEP;
+
+        const innerColumns = Math.max(1, Math.ceil(Math.sqrt(folderNodes.length)));
+        const innerRows = Math.max(1, Math.ceil(folderNodes.length / innerColumns));
+
+        for (const [nodeIndex, nodeId] of folderNodes.entries()) {
+            const innerRow = Math.floor(nodeIndex / innerColumns);
+            const innerCol = nodeIndex % innerColumns;
+            const offsetX = (innerCol - (innerColumns - 1) / 2) * LAYOUT_FOLDER_ITEM_X_STEP;
+            const offsetY = (innerRow - (innerRows - 1) / 2) * LAYOUT_FOLDER_ITEM_Y_STEP;
+            const jitter = getInitialJitter(nodeId);
+            positions[nodeId] = {
+                x: centerX + offsetX + jitter.x,
+                y: centerY + offsetY + jitter.y,
+            };
+        }
+    }
+
+    return positions;
+}
+
+function getAxisSeparationDirection(sourceId: string, targetId: string, axis: 'x' | 'y'): number {
+    const signature = sourceId < targetId
+        ? `${sourceId}|${targetId}|${axis}`
+        : `${targetId}|${sourceId}|${axis}`;
+    return hashSeed(signature) % 2 === 0 ? 1 : -1;
 }
 
 function normalizeRepoUrl(input: string): string {

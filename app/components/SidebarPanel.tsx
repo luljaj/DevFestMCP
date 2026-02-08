@@ -104,7 +104,12 @@ export default function SidebarPanel({ activities, locks, isDark }: SidebarPanel
                         <Activity className="h-3 w-3" />
                         Live Feed
                     </h3>
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] ${isDark ? 'border-zinc-700 bg-zinc-800 text-zinc-400' : 'border-zinc-200 bg-zinc-50 text-zinc-500'}`}>
+                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] ${isDark ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-emerald-300 bg-emerald-50 text-emerald-700'}`}>
+                        <span className="relative inline-flex h-2 w-2">
+                            <span className={`absolute inline-flex h-full w-full rounded-full opacity-70 ${isDark ? 'bg-emerald-300/70' : 'bg-emerald-500/60'}`} />
+                            <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${isDark ? 'bg-emerald-300/45' : 'bg-emerald-500/35'}`} />
+                            <span className={`relative inline-flex h-2 w-2 rounded-full ${isDark ? 'bg-emerald-300' : 'bg-emerald-500'}`} />
+                        </span>
                         Real-time
                     </span>
                 </div>
