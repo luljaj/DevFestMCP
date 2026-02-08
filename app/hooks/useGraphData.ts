@@ -77,7 +77,7 @@ interface UseGraphDataReturn {
     exportGraphJson: () => string | null;
 }
 
-const initialRepo = 'https://github.com/luljaj/DevFest';
+const initialRepo = 'https://github.com/luljaj/RelayDevFest';
 const initialBranch = 'master';
 const DEFAULT_POLL_INTERVAL_MS = 120_000;
 const MIN_POLL_INTERVAL_MS = 5_000;
@@ -92,7 +92,7 @@ interface UseGraphDataOptions {
 }
 
 export function useGraphData(options?: UseGraphDataOptions): UseGraphDataReturn {
-    const [repoUrl, setRepoUrl] = useState(initialRepo);
+    const [repoUrl, setRepoUrlState] = useState(initialRepo);
     const [branch, setBranch] = useState(initialBranch);
     const [graph, setGraph] = useState<DependencyGraph | null>(null);
     const [importedGraph, setImportedGraph] = useState<DependencyGraph | null>(null);
@@ -111,6 +111,9 @@ export function useGraphData(options?: UseGraphDataOptions): UseGraphDataReturn 
     );
     const isUsingImportedGraph = importedGraph !== null;
     const activeGraph = importedGraph ?? graph;
+    const setRepoUrl = useCallback((url: string) => {
+        setRepoUrlState(normalizeRepoUrl(url));
+    }, []);
 
     const fetchGraph = useCallback(
         async (options?: { regenerate?: boolean }) => {
@@ -460,6 +463,11 @@ function normalizeActivityPollInterval(value: number): number {
 
 function normalizeRepoUrl(input: string): string {
     const value = input.trim();
+    const ownerRepoMatch = value.match(/^([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
+    if (ownerRepoMatch) {
+        return `https://github.com/${ownerRepoMatch[1].toLowerCase()}/${ownerRepoMatch[2].toLowerCase()}`;
+    }
+
     const match = value.match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
     if (match) {
         return `https://github.com/${match[1].toLowerCase()}/${match[2].toLowerCase()}`;

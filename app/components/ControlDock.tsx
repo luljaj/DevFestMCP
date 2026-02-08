@@ -18,8 +18,8 @@ type GitHubReposPayload = {
 
 const FALLBACK_REPO: GitHubRepo = {
     id: -1,
-    full_name: 'luljaj/DevFest',
-    html_url: 'https://github.com/luljaj/DevFest',
+    full_name: 'luljaj/RelayDevFest',
+    html_url: 'https://github.com/luljaj/RelayDevFest',
     default_branch: 'master',
     private: false,
 };
@@ -306,7 +306,7 @@ function findMatchingRepo(repos: GitHubRepo[], input: string): GitHubRepo | null
 }
 
 function normalizeRepoInput(input: string): string | null {
-    const match = input.trim().match(/github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?\/?$/i);
+    const match = input.trim().match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
     if (!match) {
         return null;
     }
