@@ -33,14 +33,16 @@ vi.mock('@/lib/activity', () => ({
 }));
 
 import { GET as graphGet } from '@/app/api/graph/route';
+import { GET as activityGet } from '@/app/api/activity/route';
 import { POST as checkStatusPost } from '@/app/api/check_status/route';
 import { GET as cleanupGet } from '@/app/api/cleanup_stale_locks/route';
 import { POST as postStatusPost } from '@/app/api/post_status/route';
-import { publishActivityEvents } from '@/lib/activity';
+import { getRecentActivityEvents, publishActivityEvents } from '@/lib/activity';
 import { getRepoHeadCached } from '@/lib/github';
 import { acquireLocks, getLocks, releaseLocks } from '@/lib/locks';
 
 const mockedPublishActivityEvents = vi.mocked(publishActivityEvents);
+const mockedGetRecentActivityEvents = vi.mocked(getRecentActivityEvents);
 const mockedGetRepoHead = vi.mocked(getRepoHeadCached);
 const mockedGetLocks = vi.mocked(getLocks);
 const mockedAcquireLocks = vi.mocked(acquireLocks);
@@ -53,12 +55,14 @@ describe('route smoke checks', () => {
     mockedAcquireLocks.mockClear();
     mockedReleaseLocks.mockClear();
     mockedPublishActivityEvents.mockClear();
+    mockedGetRecentActivityEvents.mockClear();
     getCachedGraphMock.mockClear();
 
     mockedGetRepoHead.mockResolvedValue('remote-head');
     mockedGetLocks.mockResolvedValue({});
     mockedAcquireLocks.mockResolvedValue({ success: true, locks: [] });
     mockedReleaseLocks.mockResolvedValue({ success: true });
+    mockedGetRecentActivityEvents.mockResolvedValue([]);
     getCachedGraphMock.mockResolvedValue(null);
   });
 
@@ -506,5 +510,45 @@ describe('route smoke checks', () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: 'repo_url is required' });
+  });
+
+  test('activity route returns 400 when repo_url is missing', async () => {
+    const request = { url: 'http://localhost:3000/api/activity' } as any;
+    const response = await activityGet(request);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'repo_url is required' });
+  });
+
+  test('activity route returns recent activity without graph rebuilds', async () => {
+    mockedGetRecentActivityEvents.mockResolvedValueOnce([
+      {
+        id: 'evt-1',
+        file_path: 'src/a.ts',
+        user_id: 'agent-user',
+        user_name: 'Agent User',
+        status: 'WRITING',
+        message: 'editing',
+        timestamp: 12345,
+      },
+    ]);
+
+    const request = {
+      url: 'http://localhost:3000/api/activity?repo_url=https://github.com/a/b&branch=main&limit=10',
+    } as any;
+    const response = await activityGet(request);
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.activity_events).toEqual([
+      expect.objectContaining({
+        id: 'evt-1',
+        file_path: 'src/a.ts',
+        status: 'WRITING',
+      }),
+    ]);
+    expect(mockedGetRecentActivityEvents).toHaveBeenCalledWith('https://github.com/a/b', 'main', 10);
+    expect(getCachedGraphMock).not.toHaveBeenCalled();
+    expect(response.headers.get('Cache-Control')).toBe('no-store, max-age=0');
   });
 });

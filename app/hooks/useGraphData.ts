@@ -79,9 +79,13 @@ const initialBranch = 'master';
 const DEFAULT_POLL_INTERVAL_MS = 120_000;
 const MIN_POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_INTERVAL_MS = 300_000;
+const DEFAULT_ACTIVITY_POLL_INTERVAL_MS = 5_000;
+const MIN_ACTIVITY_POLL_INTERVAL_MS = 1_000;
+const MAX_ACTIVITY_POLL_INTERVAL_MS = 60_000;
 
 interface UseGraphDataOptions {
     pollIntervalMs?: number;
+    activityPollIntervalMs?: number;
 }
 
 export function useGraphData(options?: UseGraphDataOptions): UseGraphDataReturn {
@@ -99,6 +103,9 @@ export function useGraphData(options?: UseGraphDataOptions): UseGraphDataReturn 
     const hasLoadedRef = useRef(false);
     const previousLocksRef = useRef<Record<string, LockEntry>>({});
     const pollIntervalMs = normalizePollInterval(options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
+    const activityPollIntervalMs = normalizeActivityPollInterval(
+        options?.activityPollIntervalMs ?? DEFAULT_ACTIVITY_POLL_INTERVAL_MS,
+    );
     const isUsingImportedGraph = importedGraph !== null;
     const activeGraph = importedGraph ?? graph;
 
@@ -174,6 +181,33 @@ export function useGraphData(options?: UseGraphDataOptions): UseGraphDataReturn 
         [repoUrl, branch, isUsingImportedGraph, rateLimitRetryAt],
     );
 
+    const fetchActivities = useCallback(async () => {
+        if (isUsingImportedGraph) {
+            return;
+        }
+
+        try {
+            const normalizedRepoUrl = normalizeRepoUrl(repoUrl);
+            const query = new URLSearchParams({
+                repo_url: normalizedRepoUrl,
+                branch: branch.trim() || initialBranch,
+                limit: '120',
+            });
+            const response = await fetch(`/api/activity?${query.toString()}`, { cache: 'no-store' });
+            if (!response.ok) {
+                return;
+            }
+
+            const payload = (await response.json()) as ActivityApiResponse;
+            const backendActivities = parseBackendActivityEvents(payload.activity_events);
+            if (backendActivities) {
+                setActivities(backendActivities.slice(0, 80));
+            }
+        } catch (error) {
+            console.warn('[Graph] Failed to fetch activity feed:', error);
+        }
+    }, [repoUrl, branch, isUsingImportedGraph]);
+
     useEffect(() => {
         if (isUsingImportedGraph) {
             return;
@@ -186,7 +220,8 @@ export function useGraphData(options?: UseGraphDataOptions): UseGraphDataReturn 
         hasLoadedRef.current = false;
 
         fetchGraph();
-    }, [fetchGraph, isUsingImportedGraph]);
+        fetchActivities();
+    }, [fetchGraph, fetchActivities, isUsingImportedGraph]);
 
     useEffect(() => {
         if (isUsingImportedGraph) {
@@ -199,6 +234,18 @@ export function useGraphData(options?: UseGraphDataOptions): UseGraphDataReturn 
 
         return () => clearInterval(interval);
     }, [fetchGraph, pollIntervalMs, isUsingImportedGraph]);
+
+    useEffect(() => {
+        if (isUsingImportedGraph) {
+            return;
+        }
+
+        const interval = setInterval(() => {
+            fetchActivities();
+        }, activityPollIntervalMs);
+
+        return () => clearInterval(interval);
+    }, [fetchActivities, activityPollIntervalMs, isUsingImportedGraph]);
 
     const importGraphFromJson = useCallback((json: string): { error: string | null } => {
         if (!json.trim()) {
@@ -271,6 +318,10 @@ type GraphApiError = {
     error?: string;
     details?: string;
     retry_after_ms?: number;
+};
+
+type ActivityApiResponse = {
+    activity_events?: unknown;
 };
 
 function parseGraphResponse(rawBody: string): DependencyGraph | GraphApiError {
@@ -356,6 +407,17 @@ function normalizePollInterval(value: number): number {
     }
 
     return Math.min(MAX_POLL_INTERVAL_MS, Math.max(MIN_POLL_INTERVAL_MS, Math.round(value)));
+}
+
+function normalizeActivityPollInterval(value: number): number {
+    if (!Number.isFinite(value)) {
+        return DEFAULT_ACTIVITY_POLL_INTERVAL_MS;
+    }
+
+    return Math.min(
+        MAX_ACTIVITY_POLL_INTERVAL_MS,
+        Math.max(MIN_ACTIVITY_POLL_INTERVAL_MS, Math.round(value)),
+    );
 }
 
 function normalizeRepoUrl(input: string): string {
