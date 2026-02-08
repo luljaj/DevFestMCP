@@ -1,3 +1,4 @@
+// Luka (GPT-5.3): Optimized atomic operations for better concurrency
 import { kv } from './kv';
 import { normalizeRepoUrl } from './github';
 
