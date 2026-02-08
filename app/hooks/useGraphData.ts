@@ -76,7 +76,7 @@ interface UseGraphDataReturn {
     exportGraphJson: () => string | null;
 }
 
-const initialRepo = 'https://github.com/luljaj/RelayDevFest';
+const initialRepo = 'https://github.com/luljaj/DevFest';
 const initialBranch = 'master';
 const DEFAULT_POLL_INTERVAL_MS = 120_000;
 const MIN_POLL_INTERVAL_MS = 5_000;
